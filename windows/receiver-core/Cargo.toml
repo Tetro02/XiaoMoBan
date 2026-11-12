@@ -1,0 +1,27 @@
+[package]
+name = "pennote-bridge-receiver"
+version = "0.1.0"
+edition = "2021"
+license = "PolyForm-Noncommercial-1.0.0"
+description = "TLS pen-input receiver for XiaoMoBan"
+
+[dependencies]
+async-stream = "0.3"
+futures-core = "0.3"
+getrandom = "0.3"
+prost = "0.14"
+rcgen = "0.13.2"
+rustls-pemfile = "2"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+subtle = "2"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-stream = { version = "0.1", features = ["net"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tonic = { version = "0.14", features = ["tls-ring"] }
+tonic-prost = "0.14"
+
+[build-dependencies]
+protoc-bin-vendored = "3"
+tonic-prost-build = "0.14"

@@ -1,0 +1,80 @@
+syntax = "proto3";
+package vt;
+
+// Wire-compatible with the independently implemented Android client.
+service VtService {
+  rpc Handshake (HandshakeRequest) returns (HandshakeResponse);
+  rpc ObserveServerInfo (Empty) returns (stream ServerInfo);
+  rpc StreamPenEvents (stream PenEvent) returns (Empty);
+  rpc StreamAbsoluteMouseEvents (stream AbsoluteMouseEvent) returns (Empty);
+  rpc SendShortcut (KeyboardShortcut) returns (Empty);
+  rpc NavigateCanvas (CanvasNavigation) returns (Empty);
+}
+
+message Empty {}
+
+message HandshakeRequest {
+  string client_version = 1;
+  repeated uint32 supported_protocol_versions = 2;
+  string client_display_name = 3;
+  string client_platform = 4;
+}
+
+message HandshakeResponse {
+  string server_version = 1;
+  uint32 negotiated_protocol_version = 2;
+  bool compatible = 3;
+  ServerInfo server_info = 4;
+  uint32 server_max_protocol_version = 5;
+}
+
+message ServerInfo {
+  string server_name = 1;
+  uint32 width = 2;
+  uint32 height = 3;
+  string display_name = 4;
+  uint32 display_index = 5;
+  string host_os = 6;
+  repeated uint32 display_refresh_hz = 7;
+  bool keyboard_shortcuts = 8;
+  bool canvas_navigation = 9;
+}
+
+message KeyboardShortcut {
+  uint32 usage = 1;
+  uint32 modifiers = 2;
+}
+
+message CanvasNavigation {
+  float pan_x = 1;
+  float pan_y = 2;
+  float scale = 3;
+  float focus_x = 4;
+  float focus_y = 5;
+  uint32 action = 6;
+}
+
+message PenEvent {
+  uint32 status_mask = 1;
+  uint32 x = 2;
+  uint32 y = 3;
+  uint32 pressure = 4;
+  sint32 tilt_x = 5;
+  sint32 tilt_y = 6;
+  uint32 twist = 7;
+  uint64 client_send_us = 8;
+  optional uint32 hover_pan_deadzone_px = 9;
+}
+
+message AbsoluteMouseEvent {
+  uint32 buttons = 1;
+  uint32 x = 2;
+  uint32 y = 3;
+  uint64 client_send_us = 4;
+  // PenNote Bridge extension. Absolute-only clients leave both fields unset.
+  bool relative = 5;
+  // Stylus is in range. Tip contact is still expressed by the left button.
+  bool relative_active = 6;
+  // Relative-pointer sensitivity. An omitted value means 1×.
+  float relative_gain = 7;
+}

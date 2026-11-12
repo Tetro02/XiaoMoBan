@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="TabletTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#111824</item>
+        <item name="android:colorAccent">#B1CAFF</item>
+        <item name="android:navigationBarColor">#111824</item>
+        <item name="android:statusBarColor">#111824</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:alertDialogTheme">@style/TabletDialog</item>
+    </style>
+    <style name="TabletDialog" parent="android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">#B1CAFF</item>
+        <item name="android:colorBackground">#182131</item>
+        <item name="android:textColorPrimary">#F0F3FA</item>
+        <item name="android:textColorSecondary">#B3C0D2</item>
+        <item name="android:backgroundDimAmount">0.56</item>
+    </style>
+</resources>

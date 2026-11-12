@@ -19,3 +19,17 @@
 ## 首发测试状态
 
 实机 USB 测试使用 Galaxy Tab S7+ 和 Windows 11 x64。Windows EXE 为未签名的便携程序，蓝牙 HID 直连仍是测试功能。使用说明、SHA-256 校验值和第三方许可随首发包提供。
+
+## 从源码构建
+
+- [Android 客户端](android/README.md)
+- [Windows 接收器、批注和白板](windows/README.md)
+- [可自建的在线连接码服务](relay/README.md)
+
+要重绘 Windows 图标，可安装 Python 的 CairoSVG 和 Pillow，然后运行 `python tools/render_desktop_icon.py`。它从 Android 的矢量图标生成 `windows/app/icon.ico`。
+
+## 许可证
+
+小墨板以源码公开（source-available）的方式发布。原创代码和官方发行版中的原创部分采用 **PolyForm Noncommercial License 1.0.0**。许可允许非商业使用、修改和再分发，分发时须随附许可和版权声明。商业用途须另获授权。许可所列机构的适用条款以正文为准。[许可证全文](LICENSE)
+
+第三方组件沿用各自的许可证。[第三方声明](THIRD-PARTY-NOTICES.txt)

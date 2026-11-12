@@ -11,6 +11,8 @@ powershell.exe -NoProfile -File .\windows\build.ps1
 
 可执行文件 `XiaoMoBan-Windows-x64.exe` 及随附的 `LICENSE`、`THIRD-PARTY-NOTICES.txt` 位于 `windows/dist/`。可执行文件内嵌 Rust 接收器，无需 WebView。USB 连接需要单独安装 Android Platform-Tools，并在桌面端选择其中的 `adb.exe`。[Android Platform-Tools](https://developer.android.com/tools/releases/platform-tools)
 
+如果工作目录较深，且 MSVC 因路径过长报错，可把 `CARGO_TARGET_DIR` 设为较短的目录，例如在上述终端运行 `set "CARGO_TARGET_DIR=%TEMP%\xm-target"`，再执行构建。
+
 ## 验证
 
 从同一终端运行接收器测试和可执行文件的回环测试：

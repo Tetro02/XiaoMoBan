@@ -9,7 +9,10 @@ $app = Join-Path $PSScriptRoot 'app'
 $manifest = Join-Path $PSScriptRoot 'receiver-host/Cargo.toml'
 
 if (-not $ReceiverDll) {
-    $targetDir = Join-Path $PSScriptRoot 'receiver-host/target'
+    $targetDir = Join-Path $PSScriptRoot 'target'
+    if ($env:CARGO_TARGET_DIR) {
+        $targetDir = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($env:CARGO_TARGET_DIR)
+    }
     $previousFlags = $env:RUSTFLAGS
     try {
         $env:RUSTFLAGS = ("$previousFlags -C target-feature=+crt-static").Trim()

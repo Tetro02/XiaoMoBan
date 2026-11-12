@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("小墨板")]
 [assembly: AssemblyDescription("Windows 数位板接收与屏幕批注")]
 [assembly: AssemblyProduct("小墨板")]
-[assembly: AssemblyVersion("0.6.3.0")]
-[assembly: AssemblyFileVersion("0.6.3.0")]
+[assembly: AssemblyVersion("0.6.4.0")]
+[assembly: AssemblyFileVersion("0.6.4.0")]
 
 namespace PenNoteBridge
 {
@@ -33,7 +33,9 @@ namespace PenNoteBridge
                 }
                 try
                 {
-                    using (var receiver = new DesktopHost(DesktopHost.ProfileDirectory()))
+                    string profile = DesktopHost.ProfileDirectory();
+                    DesktopTheme.Initialize(profile);
+                    using (var receiver = new DesktopHost(profile))
                     using (var desktop = new DesktopSession(receiver))
                         Application.Run(desktop);
                     return 0;
@@ -89,11 +91,17 @@ namespace PenNoteBridge
             menu.Items.Add("白板", null, delegate { annotation.ToggleWhiteboard(); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出小墨板", null, delegate { Exit(); });
+            ApplyTheme(null, EventArgs.Empty);
+            DesktopTheme.Changed += ApplyTheme;
             tray = new NotifyIcon { Icon = icon, Text = "小墨板 · 数位板与批注", ContextMenuStrip = menu, Visible = true };
             tray.MouseClick += delegate(object sender, MouseEventArgs e) { if (e.Button == MouseButtons.Left) ShowDashboard(); };
 
             timer = new System.Windows.Forms.Timer { Interval = 160 };
-            timer.Tick += delegate { if (dashboard.Visible) Refresh(); };
+            timer.Tick += delegate
+            {
+                DesktopTheme.RefreshSystemTheme();
+                if (dashboard.Visible) Refresh();
+            };
             timer.Start();
             gestures = new System.Windows.Forms.Timer { Interval = 25 };
             gestures.Tick += delegate
@@ -129,6 +137,11 @@ namespace PenNoteBridge
             if (dashboard.WindowState == FormWindowState.Minimized) dashboard.WindowState = FormWindowState.Normal;
             dashboard.Activate();
             Refresh();
+        }
+
+        void ApplyTheme(object sender, EventArgs args)
+        {
+            DesktopTheme.ApplyMenu(menu);
         }
 
         public bool PreFilterMessage(ref Message message)
@@ -229,6 +242,7 @@ namespace PenNoteBridge
                 gestures.Stop();
                 gestures.Dispose();
                 Application.RemoveMessageFilter(this);
+                DesktopTheme.Changed -= ApplyTheme;
                 tray.Visible = false;
                 tray.Dispose();
                 menu.Dispose();

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -13,25 +14,33 @@ namespace PenNoteBridge
 {
     public sealed class Dashboard : Form
     {
-        static readonly Color Canvas = Color.FromArgb(250, 245, 244);
-        static readonly Color Paper = Color.FromArgb(255, 253, 253);
-        static readonly Color Ink = Color.FromArgb(53, 39, 45);
-        static readonly Color Quiet = Color.FromArgb(108, 85, 93);
-        static readonly Color Line = Color.FromArgb(236, 219, 224);
-        static readonly Color Accent = Color.FromArgb(150, 53, 83);
-        static readonly Color SoftAccent = Color.FromArgb(250, 229, 236);
-        static readonly Color Green = Color.FromArgb(25, 108, 70);
-        static readonly Color Error = Color.FromArgb(164, 39, 60);
+        static readonly Color LightPaper = Color.FromArgb(255, 253, 253);
+        static readonly Color LightQuiet = Color.FromArgb(108, 85, 93);
+        static readonly Color LightLine = Color.FromArgb(236, 219, 224);
+        static readonly Color LightAccent = Color.FromArgb(150, 53, 83);
+        static readonly Color LightSoftAccent = Color.FromArgb(250, 229, 236);
+        static Color Canvas { get { return DesktopTheme.IsDark ? DesktopTheme.Canvas : Color.FromArgb(250, 245, 244); } }
+        static Color Paper { get { return DesktopTheme.IsDark ? DesktopTheme.Paper : LightPaper; } }
+        static Color Ink { get { return DesktopTheme.IsDark ? DesktopTheme.Ink : Color.FromArgb(53, 39, 45); } }
+        static Color Quiet { get { return DesktopTheme.IsDark ? DesktopTheme.Muted : LightQuiet; } }
+        static Color Line { get { return DesktopTheme.IsDark ? DesktopTheme.Outline : LightLine; } }
+        static Color Accent { get { return DesktopTheme.IsDark ? DesktopTheme.Accent : LightAccent; } }
+        static Color SoftAccent { get { return DesktopTheme.IsDark ? DesktopTheme.SoftAccent : LightSoftAccent; } }
+        static Color AccentLine { get { return DesktopTheme.IsDark ? DesktopTheme.AccentLine : Color.FromArgb(193, 115, 143); } }
+        static Color Green { get { return DesktopTheme.IsDark ? DesktopTheme.Green : Color.FromArgb(25, 108, 70); } }
+        static Color Error { get { return DesktopTheme.IsDark ? DesktopTheme.Error : Color.FromArgb(164, 39, 60); } }
+        static readonly object PaperBackground = new object();
         static readonly string[] Routes = { "lan", "usb", "bluetooth" };
         static readonly string[] RouteNames = { "局域网", "USB", "蓝牙" };
+        static readonly DesktopThemeMode[] ThemeModes = { DesktopThemeMode.System, DesktopThemeMode.Light, DesktopThemeMode.Dark };
 
-        readonly Label status = LabelFor("准备连接");
-        readonly Label lanState = LabelFor("");
-        readonly Label usbState = LabelFor("");
+        readonly ThemeLabel status = LabelFor("准备连接");
+        readonly ThemeLabel lanState = LabelFor("");
+        readonly ThemeLabel usbState = LabelFor("");
         readonly Label usbScanStatus = Paragraph("");
         readonly Label hidState = LabelFor("");
         readonly Label bluetoothHidState = LabelFor("");
-        readonly Label pin = LabelFor("— — —");
+        readonly ThemeLabel pin = LabelFor("— — —");
         readonly Label expiry = LabelFor("");
         readonly Label deviceSummary = LabelFor("连接设备", true);
         readonly Label pressureValue = LabelFor("×1.00");
@@ -62,8 +71,8 @@ namespace PenNoteBridge
         readonly Button copyBluetooth = ButtonFor("复制兼容蓝牙密钥");
         readonly Button sppStart = ButtonFor("启用兼容蓝牙");
         readonly TextBox logs = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical,
-            BackColor = Paper, ForeColor = Ink, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "接收日志" };
-        readonly Panel page = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Paper };
+            Tag = PaperBackground, BorderStyle = BorderStyle.FixedSingle, AccessibleName = "接收日志" };
+        readonly Panel page = new Panel { Dock = DockStyle.Fill, Margin = Padding.Empty, Tag = PaperBackground };
         readonly Button[] tabButtons = new Button[3];
         readonly Control[] tabPages = new Control[3];
 
@@ -80,6 +89,7 @@ namespace PenNoteBridge
         Form settings;
         TabPage connectionSettings;
         TabPage onlineSettings;
+        ComboBox appearance;
 
         public event Action<string, IDictionary<string, object>> Command;
 
@@ -116,13 +126,15 @@ namespace PenNoteBridge
             WireActions();
             SelectTab(0);
             RenderSnapshot(Args());
+            ApplyTheme(this);
+            DesktopTheme.Changed += ThemeChanged;
         }
 
         Control BuildHeader()
         {
             var header = Rows(3, -1);
             header.Dock = DockStyle.Fill;
-            header.BackColor = Paper;
+            header.Tag = PaperBackground;
             header.Padding = new Padding(22, 9, 16, 9);
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 58));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -182,7 +194,7 @@ namespace PenNoteBridge
             body.Controls.Add(Paragraph("首次连接可输入六位连接码，或用平板扫描连接二维码。"), 0, 1);
             body.Controls.Add(LabelFor("本地连接码", true), 0, 2);
             pin.Font = new Font("Consolas", 23F, FontStyle.Bold);
-            pin.ForeColor = Accent;
+            pin.SetTone(LabelTone.Accent);
             pin.AccessibleName = "本地连接码";
             body.Controls.Add(Group(true, pin, copyCode, newCode), 0, 3);
             body.Controls.Add(expiry, 0, 4);
@@ -256,7 +268,7 @@ namespace PenNoteBridge
         Control ConnectionCard(int route, out TableLayoutPanel body, params int[] rows)
         {
             var card = Rows(2, -1);
-            card.BackColor = Paper;
+            card.Tag = PaperBackground;
             card.Dock = DockStyle.Fill;
             card.Padding = new Padding(21, 18, 19, 13);
             card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65));
@@ -274,7 +286,7 @@ namespace PenNoteBridge
         {
             var tray = Rows(3, -1);
             tray.Dock = DockStyle.Fill;
-            tray.BackColor = Paper;
+            tray.Tag = PaperBackground;
             tray.Padding = new Padding(14, 0, 11, 0);
             tray.Paint += delegate (object sender, PaintEventArgs e) { DrawOutline(tray, e); };
             tray.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 125));
@@ -387,10 +399,10 @@ namespace PenNoteBridge
                 string wiredWinner = StringAt(snapshot, "wiredWinner");
                 lanState.Text = lanRunning ? "●  局域网已开启" : wiredWinner == "usb" ?
                     "○  USB 已连接，局域网暂停" : "○  局域网已停止";
-                lanState.ForeColor = lanRunning ? Green : Quiet;
+                lanState.SetTone(lanRunning ? LabelTone.Success : LabelTone.Quiet);
                 usbState.Text = usbRunning ? "●  USB 接收已开启" : wiredWinner == "lan" ?
                     "○  局域网已连接，USB 暂停" : "○  USB 接收已停止";
-                usbState.ForeColor = usbRunning ? Green : Quiet;
+                usbState.SetTone(usbRunning ? LabelTone.Success : LabelTone.Quiet);
                 lanStart.Visible = !lanRunning && wiredWinner != "usb";
                 usbStart.Visible = !usbRunning && wiredWinner != "lan";
                 sppStart.Visible = !sppRunning;
@@ -447,7 +459,7 @@ namespace PenNoteBridge
                 string text = StringAt(snapshot, "status");
                 status.Text = lastError.Length > 0 ? lastError : DateTime.UtcNow < feedbackUntil ? feedback :
                     count > 0 ? "平板已连接" : text.Length > 0 ? text : "准备连接";
-                status.ForeColor = lastError.Length > 0 ? Error : count > 0 ? Green : Quiet;
+                status.SetTone(lastError.Length > 0 ? LabelTone.Error : count > 0 ? LabelTone.Success : LabelTone.Quiet);
                 if (At(config, "inject") != null) inject.Checked = BoolAt(config, "inject");
                 if (At(config, "pressure") != null && !sendPressure.Enabled && !pressure.Capture)
                     pressure.Value = Math.Max(25, Math.Min(200, (int)Math.Round(NumberAt(config, "pressure", 1) * 100)));
@@ -516,8 +528,8 @@ namespace PenNoteBridge
             if (settings == null || settings.IsDisposed)
             {
                 settings = MakeDialog("小墨板设置", new Size(543, 360));
-                var tabs = new TabControl { Dock = DockStyle.Fill };
-                var output = new TabPage("笔与显示") { BackColor = Paper, Padding = new Padding(15) };
+                var tabs = new ThemeTabs { Dock = DockStyle.Fill };
+                var output = new TabPage("笔与显示") { Padding = new Padding(15) };
                 var grid = Rows(1, 39, 37, 43, 39, 39, 48, 31, -1);
                 grid.Dock = DockStyle.Fill;
                 grid.Controls.Add(inject, 0, 0);
@@ -542,7 +554,7 @@ namespace PenNoteBridge
                 output.Controls.Add(grid);
                 tabs.TabPages.Add(output);
 
-                connectionSettings = new TabPage("连接与日志") { BackColor = Paper, Padding = new Padding(15) };
+                connectionSettings = new TabPage("连接与日志") { Padding = new Padding(15) };
                 var details = Rows(1, 45, 45, 30, -1);
                 details.Dock = DockStyle.Fill;
                 var copyIp = ButtonFor("复制 IPv4");
@@ -556,7 +568,9 @@ namespace PenNoteBridge
                 connectionSettings.Controls.Add(details);
                 tabs.TabPages.Add(connectionSettings);
 
-                onlineSettings = new TabPage("在线连接码") { BackColor = Paper, Padding = new Padding(15) };
+                tabs.TabPages.Add(BuildAppearanceSettings());
+
+                onlineSettings = new TabPage("在线连接码") { Padding = new Padding(15) };
                 var relay = Rows(1, 58, 41, 44, 47, -1);
                 relay.Dock = DockStyle.Fill;
                 relay.Controls.Add(Paragraph("可用自己的 HTTPS 配对服务交换连接信息。笔输入仍在本地网络传输。"), 0, 0);
@@ -581,9 +595,35 @@ namespace PenNoteBridge
             var settingsTabs = (TabControl)settings.Controls[0];
             if (onlineSettings != null && At(current, "online") != null && !settingsTabs.TabPages.Contains(onlineSettings))
                 settingsTabs.TabPages.Add(onlineSettings);
+            ApplyTheme(settings);
             if (section == "connection") settingsTabs.SelectedTab = connectionSettings;
             if (!settings.Visible) settings.Show(this);
             settings.Activate();
+        }
+
+        TabPage BuildAppearanceSettings()
+        {
+            var tab = new TabPage("外观") { Padding = new Padding(15) };
+            var fields = Rows(1, 43, -1);
+            fields.Dock = DockStyle.Fill;
+            appearance = ComboFor("主题");
+            appearance.Items.AddRange(new object[] { "跟随系统", "浅色", "深色" });
+            appearance.SelectedIndex = Array.IndexOf(ThemeModes, DesktopTheme.Mode);
+            appearance.SelectionChangeCommitted += delegate {
+                int selection = appearance.SelectedIndex;
+                if (selection < 0) return;
+                try { DesktopTheme.SetMode(ThemeModes[selection]); }
+                catch (Exception error)
+                {
+                    if (!(error is IOException || error is UnauthorizedAccessException)) throw;
+                    appearance.SelectedIndex = Array.IndexOf(ThemeModes, DesktopTheme.Mode);
+                    MessageBox.Show(settings, "无法保存主题设置，请检查小墨板本地数据目录的写入权限。",
+                        "小墨板", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
+            };
+            fields.Controls.Add(Field("主题", appearance), 0, 0);
+            tab.Controls.Add(fields);
+            return tab;
         }
 
         void OpenPenTest()
@@ -602,6 +642,7 @@ namespace PenNoteBridge
                 grid.Controls.Add(LabelFor("用平板上的笔轻重落笔，比较笔画粗细。"), 0, 1);
                 grid.Controls.Add(clear, 1, 1);
                 dialog.Controls.Add(grid);
+                ApplyTheme(dialog);
                 dialog.ShowDialog(settings ?? this);
             }
         }
@@ -632,6 +673,7 @@ namespace PenNoteBridge
                 if (matrix != null) dialog.Controls.Add(new QrSurface(matrix) { Dock = DockStyle.Fill, AccessibleName = "局域网配对二维码" });
                 dialog.Controls.Add(tip);
                 dialog.Controls.Add(copy);
+                ApplyTheme(dialog);
                 dialog.ShowDialog(settings != null && settings.Visible ? settings : this);
             }
         }
@@ -641,16 +683,72 @@ namespace PenNoteBridge
             if (IsDisposed) return;
             if (InvokeRequired) { BeginInvoke(new Action<string, bool>(SetStatus), message, error); return; }
             status.Text = message ?? "";
-            status.ForeColor = error ? Error : Quiet;
+            status.SetTone(error ? LabelTone.Error : LabelTone.Quiet);
             lastError = error ? status.Text : "";
             feedback = status.Text;
             feedbackUntil = DateTime.UtcNow.AddSeconds(3);
         }
 
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            DesktopTheme.ApplyTitleBar(this);
+        }
+
         protected override void Dispose(bool disposing)
         {
-            if (disposing) { sendPressure.Dispose(); if (settings != null) settings.Dispose(); }
+            if (disposing)
+            {
+                DesktopTheme.Changed -= ThemeChanged;
+                sendPressure.Dispose();
+                if (settings != null) settings.Dispose();
+            }
             base.Dispose(disposing);
+        }
+
+        void ThemeChanged(object sender, EventArgs e)
+        {
+            if (appearance != null && !appearance.IsDisposed)
+                appearance.SelectedIndex = Array.IndexOf(ThemeModes, DesktopTheme.Mode);
+            ApplyTheme(this);
+            if (settings != null && !settings.IsDisposed && settings.Owner != this) ApplyTheme(settings);
+        }
+
+        static void ApplyTheme(Control control)
+        {
+            var form = control as Form;
+            var button = control as ThemeButton;
+            var label = control as ThemeLabel;
+            var tabs = control as ThemeTabs;
+            if (form != null)
+            {
+                form.BackColor = form is Dashboard ? Canvas : Paper;
+                form.ForeColor = Ink;
+                DesktopTheme.ApplyTitleBar(form);
+                foreach (Form owned in form.OwnedForms) ApplyTheme(owned);
+            }
+            else if (button != null) button.ApplyColors();
+            else if (label != null) label.ApplyColors();
+            else if (tabs != null) tabs.ApplyColors();
+            else if (control is PenPad) ((PenPad)control).ApplyColors();
+            else if (control is TabPage)
+            {
+                ((TabPage)control).UseVisualStyleBackColor = false;
+                control.BackColor = Paper;
+            }
+            else if (control is TextBox || control is ComboBox)
+            {
+                control.ForeColor = Ink;
+                control.BackColor = ReferenceEquals(control.Tag, PaperBackground) ? Paper :
+                    DesktopTheme.IsDark ? DesktopTheme.Surface : SystemColors.Window;
+            }
+            else if (control is TrackBar || ReferenceEquals(control.Tag, PaperBackground))
+                control.BackColor = Paper;
+            else if (control is CheckBox)
+                control.ForeColor = Ink;
+
+            foreach (Control child in control.Controls) ApplyTheme(child);
+            control.Invalidate();
         }
 
         void Send(string name, IDictionary<string, object> args = null)
@@ -724,7 +822,7 @@ namespace PenNoteBridge
                 using (var background = new SolidBrush(SoftAccent))
                 using (var paper = new SolidBrush(Paper))
                 using (var stroke = new Pen(Accent, 2.2F) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
-                using (var soft = new Pen(Color.FromArgb(193, 115, 143), 1.8F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                using (var soft = new Pen(AccentLine, 1.8F) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 {
                     g.FillEllipse(background, 31, 13, 181, 181);
                     using (var monitor = Round(19, 76, 96, 62))
@@ -803,28 +901,22 @@ namespace PenNoteBridge
                 Anchor = AnchorStyles.Right, Margin = Padding.Empty, Padding = Padding.Empty };
         }
 
-        static Label LabelFor(string text, bool important = false)
+        static ThemeLabel LabelFor(string text, bool important = false)
         {
-            return new Label { AutoSize = true, Text = text, ForeColor = important ? Ink : Quiet,
+            return new ThemeLabel(important ? LabelTone.Ink : LabelTone.Quiet) { AutoSize = true, Text = text,
                 Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 4, 0), TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
         }
 
         static Button ButtonFor(string text, bool primary = false)
         {
-            var button = new Button { Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Left,
+            return new ThemeButton(primary) { Text = text, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Anchor = AnchorStyles.Left,
                 MinimumSize = new Size(0, 32), Margin = new Padding(4, 0, 0, 0), Padding = new Padding(9, 0, 9, 0),
-                ForeColor = primary ? Paper : Accent, BackColor = primary ? Accent : Paper, FlatStyle = FlatStyle.Flat, UseMnemonic = false,
-                UseVisualStyleBackColor = false };
-            button.FlatAppearance.BorderColor = primary ? Accent : Line;
-            button.FlatAppearance.MouseOverBackColor = primary ? Color.FromArgb(125, 43, 69) : SoftAccent;
-            return button;
+                UseMnemonic = false };
         }
 
         static void Mark(Button button, bool active)
         {
-            button.BackColor = active ? SoftAccent : Paper;
-            button.FlatAppearance.BorderColor = active ? Accent : Line;
-            button.AccessibleDescription = active ? "已启用" : "未启用";
+            ((ThemeButton)button).SetActive(active);
         }
 
         static CheckBox CheckFor(string text)
@@ -834,14 +926,156 @@ namespace PenNoteBridge
 
         static ComboBox ComboFor(string name)
         {
-            return new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = name, ForeColor = Ink };
+            return new ThemeComboBox { DropDownStyle = ComboBoxStyle.DropDownList, AccessibleName = name, ForeColor = Ink };
         }
 
         Form MakeDialog(string caption, Size size)
         {
-            return new Form { Text = caption, ClientSize = size, Padding = new Padding(15), StartPosition = FormStartPosition.CenterParent,
+            var dialog = new Form { Text = caption, ClientSize = size, Padding = new Padding(15), StartPosition = FormStartPosition.CenterParent,
                 Font = Font, BackColor = Paper, FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
                 ShowInTaskbar = false, AutoScaleMode = AutoScaleMode.Dpi };
+            dialog.HandleCreated += delegate { DesktopTheme.ApplyTitleBar(dialog); };
+            return dialog;
+        }
+
+        enum LabelTone { Quiet, Ink, Accent, Success, Error }
+
+        sealed class ThemeLabel : Label
+        {
+            LabelTone tone;
+
+            public ThemeLabel(LabelTone tone) { SetTone(tone); }
+
+            public void SetTone(LabelTone value)
+            {
+                tone = value;
+                ApplyColors();
+            }
+
+            public void ApplyColors()
+            {
+                switch (tone)
+                {
+                    case LabelTone.Ink: ForeColor = Ink; break;
+                    case LabelTone.Accent: ForeColor = Accent; break;
+                    case LabelTone.Success: ForeColor = Green; break;
+                    case LabelTone.Error: ForeColor = Error; break;
+                    default: ForeColor = Quiet; break;
+                }
+            }
+        }
+
+        sealed class ThemeButton : Button
+        {
+            readonly bool primary;
+            bool active;
+
+            public ThemeButton(bool primary)
+            {
+                this.primary = primary;
+                FlatStyle = FlatStyle.Flat;
+                UseVisualStyleBackColor = false;
+                ApplyColors();
+            }
+
+            public void SetActive(bool value)
+            {
+                active = value;
+                AccessibleDescription = value ? "已启用" : "未启用";
+                ApplyColors();
+            }
+
+            public void ApplyColors()
+            {
+                bool dark = DesktopTheme.IsDark;
+                Color fill = dark ? DesktopTheme.AccentFill : LightAccent;
+                ForeColor = primary ? dark ? DesktopTheme.AccentText : LightPaper : Accent;
+                BackColor = primary ? fill : active ? SoftAccent : Paper;
+                FlatAppearance.BorderColor = primary ? fill : active ? Accent : Line;
+                FlatAppearance.MouseOverBackColor = primary ? dark ? DesktopTheme.Hover : Color.FromArgb(125, 43, 69) : SoftAccent;
+                FlatAppearance.MouseDownBackColor = dark ? DesktopTheme.Pressed : Color.Empty;
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                if (Enabled || !DesktopTheme.IsDark)
+                {
+                    base.OnPaint(e);
+                    return;
+                }
+
+                e.Graphics.Clear(DesktopTheme.Surface);
+                DrawOutline(this, e);
+                TextRenderer.DrawText(e.Graphics, Text, Font, ClientRectangle, Quiet,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+            }
+        }
+
+        sealed class ThemeComboBox : ComboBox
+        {
+            public ThemeComboBox()
+            {
+                DrawMode = DrawMode.OwnerDrawFixed;
+                ItemHeight = Font.Height + 2;
+            }
+
+            protected override void OnFontChanged(EventArgs e)
+            {
+                base.OnFontChanged(e);
+                ItemHeight = Font.Height + 2;
+            }
+
+            protected override void OnDrawItem(DrawItemEventArgs e)
+            {
+                bool highlighted = (e.State & DrawItemState.Selected) != 0 && (e.State & DrawItemState.ComboBoxEdit) == 0;
+                Color background = highlighted ? DesktopTheme.IsDark ? SoftAccent : SystemColors.Highlight : BackColor;
+                Color foreground = !Enabled ? Quiet : highlighted && !DesktopTheme.IsDark ? SystemColors.HighlightText : Ink;
+                using (var brush = new SolidBrush(background)) e.Graphics.FillRectangle(brush, e.Bounds);
+                if (e.Index >= 0 && e.Index < Items.Count)
+                    TextRenderer.DrawText(e.Graphics, GetItemText(Items[e.Index]), Font, Rectangle.Inflate(e.Bounds, -2, 0), foreground,
+                        TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                if ((e.State & DrawItemState.Focus) != 0) ControlPaint.DrawFocusRectangle(e.Graphics, e.Bounds, foreground, background);
+            }
+        }
+
+        sealed class ThemeTabs : TabControl
+        {
+            public void ApplyColors()
+            {
+                bool dark = DesktopTheme.IsDark;
+                if (GetStyle(ControlStyles.UserPaint) == dark) return;
+                SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer, dark);
+                UpdateStyles();
+            }
+
+            protected override void OnSelectedIndexChanged(EventArgs e)
+            {
+                base.OnSelectedIndexChanged(e);
+                Invalidate();
+            }
+
+            protected override void OnPaintBackground(PaintEventArgs e)
+            {
+                e.Graphics.Clear(Canvas);
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                for (int index = 0; index < TabCount; ++index)
+                {
+                    Rectangle bounds = Rectangle.Inflate(GetTabRect(index), -1, -1);
+                    if (bounds.Width < 1 || bounds.Height < 1) continue;
+                    bool active = index == SelectedIndex;
+                    Color fill = active ? SoftAccent : Paper;
+                    Color text = active ? Ink : Quiet;
+                    using (var brush = new SolidBrush(fill)) e.Graphics.FillRectangle(brush, bounds);
+                    using (var pen = new Pen(active ? AccentLine : Line))
+                        e.Graphics.DrawRectangle(pen, bounds.X, bounds.Y, bounds.Width - 1, bounds.Height - 1);
+                    TextRenderer.DrawText(e.Graphics, TabPages[index].Text, Font, bounds, text,
+                        TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix);
+                    if (Focused && active) ControlPaint.DrawFocusRectangle(e.Graphics, Rectangle.Inflate(bounds, -3, -3), text, fill);
+                }
+            }
         }
 
         sealed class Choice
@@ -938,7 +1172,7 @@ namespace PenNoteBridge
             static readonly Regex Box = new Regex(@"\bviewBox\s*=\s*['"" ]0\s+0\s+(\d+)\s+\1['""]", RegexOptions.CultureInvariant);
             static readonly Regex Pixel = new Regex(@"M(\d+) (\d+)h1v1h-1z", RegexOptions.CultureInvariant);
             readonly bool[,] matrix;
-            public QrSurface(bool[,] matrix) { this.matrix = matrix; BackColor = Paper; DoubleBuffered = true; }
+            public QrSurface(bool[,] matrix) { this.matrix = matrix; BackColor = Color.White; DoubleBuffered = true; }
 
             public static bool[,] Read(string svg)
             {
@@ -966,7 +1200,7 @@ namespace PenNoteBridge
                 if (unit < 1) return;
                 int left = (ClientSize.Width - unit * size) / 2;
                 int top = (ClientSize.Height - unit * size) / 2;
-                using (var fill = new SolidBrush(Ink))
+                using (var fill = new SolidBrush(Color.FromArgb(24, 33, 49)))
                 {
                     for (int y = 0; y < size; ++y)
                         for (int x = 0; x < size; ++x)
@@ -981,8 +1215,9 @@ namespace PenNoteBridge
                 PointerEnter = 0x0249, PointerLeave = 0x024A, PointerCaptureChanged = 0x024C;
             const uint InRange = 0x2, InContact = 0x4, Canceled = 0x8000;
             const uint InvertedOrEraser = 0x6, MaskPressure = 0x1;
-            static readonly Color Stage = Color.FromArgb(253, 246, 249);
-            static readonly Color Dots = Color.FromArgb(233, 209, 221);
+            static readonly Color LightStage = Color.FromArgb(253, 246, 249);
+            static readonly Color LightDots = Color.FromArgb(233, 209, 221);
+            static readonly Color StrokeColor = Color.FromArgb(188, 87, 126);
             Bitmap inkLayer;
             bool mouseStroke;
             uint penId;
@@ -993,13 +1228,15 @@ namespace PenNoteBridge
 
             public PenPad()
             {
-                BackColor = Stage;
+                ApplyColors();
                 DoubleBuffered = true;
                 ResizeRedraw = true;
                 TabStop = false;
                 AccessibleName = "Windows 笔迹测试区域";
                 AccessibleRole = AccessibleRole.Graphic;
             }
+
+            public void ApplyColors() { BackColor = DesktopTheme.IsDark ? DesktopTheme.Surface : LightStage; }
 
             public void Reset()
             {
@@ -1021,14 +1258,14 @@ namespace PenNoteBridge
             {
                 Rectangle bounds = ClientRectangle;
                 if (bounds.Width < 2 || bounds.Height < 2) return;
-                using (var dot = new SolidBrush(Dots))
+                using (var dot = new SolidBrush(DesktopTheme.IsDark ? Line : LightDots))
                 {
                     for (int y = 13; y < bounds.Height - 5; y += 16)
                         for (int x = 13; x < bounds.Width - 5; x += 16)
                             e.Graphics.FillEllipse(dot, x, y, 2, 2);
                 }
                 using (var border = new Pen(Line)) e.Graphics.DrawRectangle(border, 0, 0, bounds.Width - 1, bounds.Height - 1);
-                using (var guide = new Pen(Color.FromArgb(200, 130, 156), 1.6F))
+                using (var guide = new Pen(DesktopTheme.IsDark ? AccentLine : Color.FromArgb(200, 130, 156), 1.6F))
                 {
                     for (int corner = 0; corner < 4; ++corner)
                     {
@@ -1072,7 +1309,7 @@ namespace PenNoteBridge
                 }
                 float size = erase ? 19F : 1.5F + (float)Clamp(pressure) * 9F;
                 using (var graphics = Graphics.FromImage(inkLayer))
-                using (var line = new Pen(erase ? Color.Transparent : Accent, size) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                using (var line = new Pen(erase ? Color.Transparent : StrokeColor, size) { StartCap = LineCap.Round, EndCap = LineCap.Round })
                 using (var brush = new SolidBrush(line.Color))
                 {
                     graphics.SmoothingMode = erase ? SmoothingMode.None : SmoothingMode.AntiAlias;

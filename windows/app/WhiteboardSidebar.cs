@@ -7,20 +7,24 @@ namespace PenNoteBridge
 {
     internal sealed class WhiteboardSidebar : UserControl
     {
-        private static readonly Color Surface = Color.FromArgb(250, 245, 244);
-        private static readonly Color Paper = Color.FromArgb(255, 253, 253);
-        private static readonly Color Ink = Color.FromArgb(53, 39, 45);
-        private static readonly Color Outline = Color.FromArgb(236, 219, 224);
-        private static readonly Color Accent = Color.FromArgb(150, 53, 83);
-        private static readonly Color Selected = Color.FromArgb(250, 229, 236);
-        private static readonly Color Muted = Color.FromArgb(108, 85, 93);
+        private static Color Surface { get { return DesktopTheme.IsDark ? DesktopTheme.Surface : Color.FromArgb(250, 245, 244); } }
+        private static Color Paper { get { return DesktopTheme.IsDark ? DesktopTheme.Paper : Color.FromArgb(255, 253, 253); } }
+        private static Color Ink { get { return DesktopTheme.IsDark ? DesktopTheme.Ink : Color.FromArgb(53, 39, 45); } }
+        private static Color Outline { get { return DesktopTheme.IsDark ? DesktopTheme.Outline : Color.FromArgb(236, 219, 224); } }
+        private static Color Accent { get { return DesktopTheme.IsDark ? DesktopTheme.Accent : Color.FromArgb(150, 53, 83); } }
+        private static Color Selected { get { return DesktopTheme.IsDark ? DesktopTheme.SoftAccent : Color.FromArgb(250, 229, 236); } }
+        private static Color Muted { get { return DesktopTheme.IsDark ? DesktopTheme.Muted : Color.FromArgb(108, 85, 93); } }
 
         private readonly Font bodyFont = new Font("Microsoft YaHei UI", 9F);
         private readonly Font titleFont = new Font("Microsoft YaHei UI", 11F, FontStyle.Bold);
+        private readonly Label title;
+        private readonly Panel library;
         private readonly ListBox boards;
         private readonly Label empty;
+        private readonly Button add;
         private readonly Button toggleWindow;
         private readonly Button rename;
+        private readonly Button exit;
         private bool updating;
 
         internal event Action ExitRequested;
@@ -32,8 +36,6 @@ namespace PenNoteBridge
         internal WhiteboardSidebar()
         {
             Font = bodyFont;
-            BackColor = Surface;
-            ForeColor = Ink;
             Size = new Size(174, 352);
             MinimumSize = new Size(148, 0);
             AutoScaleDimensions = new SizeF(96, 96);
@@ -54,17 +56,17 @@ namespace PenNoteBridge
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 35));
 
-            var title = new Label {
+            title = new Label {
                 Text = "画板", AccessibleName = "画板", AutoSize = true, Anchor = AnchorStyles.Left,
-                Font = titleFont, ForeColor = Ink, Margin = new Padding(3, 0, 0, 0), UseMnemonic = false
+                Font = titleFont, Margin = new Padding(3, 0, 0, 0), UseMnemonic = false
             };
             layout.Controls.Add(title, 0, 0);
             layout.SetColumnSpan(title, 2);
 
-            var library = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 4), BackColor = Paper };
+            library = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 4) };
             boards = new ListBox {
                 Dock = DockStyle.Fill, DrawMode = DrawMode.OwnerDrawFixed, ItemHeight = 30, IntegralHeight = false,
-                BorderStyle = BorderStyle.None, BackColor = Paper, ForeColor = Ink, AccessibleName = "画板列表",
+                BorderStyle = BorderStyle.None, AccessibleName = "画板列表",
                 AccessibleDescription = "使用方向键切换画板"
             };
             boards.DrawItem += PaintBoard;
@@ -74,7 +76,7 @@ namespace PenNoteBridge
                 if (!updating && select != null && boards.SelectedIndex >= 0) select(boards.SelectedIndex);
             };
             empty = new Label {
-                Text = "暂无画板", ForeColor = Muted, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
+                Text = "暂无画板", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
                 AccessibleName = "暂无画板"
             };
             library.Controls.Add(boards);
@@ -82,7 +84,7 @@ namespace PenNoteBridge
             layout.Controls.Add(library, 0, 1);
             layout.SetColumnSpan(library, 2);
 
-            var add = MakeButton("新建");
+            add = MakeButton("新建");
             add.AccessibleName = "新建画板";
             add.Margin = new Padding(0, 4, 3, 0);
             add.Click += delegate { var action = NewRequested; if (action != null) action(); };
@@ -98,18 +100,38 @@ namespace PenNoteBridge
             layout.Controls.Add(toggleWindow, 0, 4);
             layout.SetColumnSpan(toggleWindow, 2);
 
-            var exit = MakeButton("退出白板");
-            exit.BackColor = Accent;
-            exit.ForeColor = Color.White;
-            exit.FlatAppearance.BorderColor = Accent;
-            exit.FlatAppearance.MouseOverBackColor = Color.FromArgb(126, 43, 70);
-            exit.FlatAppearance.MouseDownBackColor = Color.FromArgb(112, 36, 60);
+            exit = MakeButton("退出白板");
             exit.Click += delegate { var action = ExitRequested; if (action != null) action(); };
             layout.Controls.Add(exit, 0, 5);
             layout.SetColumnSpan(exit, 2);
 
             Controls.Add(layout);
+            ApplyTheme();
             UpdateBoards(null, -1, false);
+        }
+
+        internal void ApplyTheme()
+        {
+            bool dark = DesktopTheme.IsDark;
+            BackColor = Surface;
+            ForeColor = title.ForeColor = boards.ForeColor = Ink;
+            library.BackColor = boards.BackColor = Paper;
+            empty.ForeColor = Muted;
+            foreach (Button button in new[] { add, rename, toggleWindow })
+            {
+                button.BackColor = Paper;
+                button.ForeColor = Accent;
+                button.FlatAppearance.BorderColor = Outline;
+                button.FlatAppearance.MouseOverBackColor = dark ? DesktopTheme.Hover : Selected;
+                button.FlatAppearance.MouseDownBackColor = dark ? DesktopTheme.Pressed : Color.FromArgb(244, 211, 224);
+            }
+            exit.BackColor = dark ? DesktopTheme.AccentFill : Accent;
+            exit.ForeColor = dark ? DesktopTheme.AccentText : Color.White;
+            exit.FlatAppearance.BorderColor = exit.BackColor;
+            exit.FlatAppearance.MouseOverBackColor = dark ? ControlPaint.Light(exit.BackColor, 0.15f) : Color.FromArgb(126, 43, 70);
+            exit.FlatAppearance.MouseDownBackColor = dark ? ControlPaint.Dark(exit.BackColor, 0.1f) : Color.FromArgb(112, 36, 60);
+            boards.Invalidate();
+            Invalidate();
         }
 
         internal void UpdateBoards(string[] names, int selected, bool smallWindow)
@@ -179,14 +201,10 @@ namespace PenNoteBridge
 
         private static Button MakeButton(string text)
         {
-            var button = new Button {
+            return new Button {
                 Text = text, Dock = DockStyle.Fill, FlatStyle = FlatStyle.Flat, UseVisualStyleBackColor = false,
-                BackColor = Paper, ForeColor = Accent, UseMnemonic = false, Margin = new Padding(0, 3, 0, 0)
+                UseMnemonic = false, Margin = new Padding(0, 3, 0, 0)
             };
-            button.FlatAppearance.BorderColor = Outline;
-            button.FlatAppearance.MouseOverBackColor = Selected;
-            button.FlatAppearance.MouseDownBackColor = Color.FromArgb(244, 211, 224);
-            return button;
         }
 
         private static string BoardName(string name) { return String.IsNullOrWhiteSpace(name) ? "未命名画板" : name; }

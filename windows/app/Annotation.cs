@@ -147,6 +147,14 @@ internal sealed class AnnotationController : IDisposable
         LoadShortcuts();
         LoadEraserSize();
         save.Tick += delegate { save.Stop(); SaveBoards(); };
+        DesktopTheme.Changed += ApplyTheme;
+    }
+
+    private void ApplyTheme(object sender, EventArgs e)
+    {
+        if (palette != null && !palette.IsDisposed) palette.ApplyTheme();
+        if (sidebar != null && !sidebar.IsDisposed) sidebar.ApplyTheme();
+        if (boardWindow != null && !boardWindow.IsDisposed) boardWindow.ApplyTheme();
     }
 
     private Document Current { get { return mode == Mode.Board ? boards[boardIndex] : screen; } }
@@ -264,6 +272,47 @@ internal sealed class AnnotationController : IDisposable
         if (escapeKey != null) escapeKey.Stop();
         try { return show(owner); }
         finally { modalDepth--; StartEscapeKey(); }
+    }
+
+    private DialogResult ShowAnnotationDialog(Form dialog)
+    {
+        EventHandler applyTheme = delegate
+        {
+            bool dark = DesktopTheme.IsDark;
+            dialog.BackColor = dark ? DesktopTheme.Paper : SystemColors.Control;
+            dialog.ForeColor = dark ? DesktopTheme.Ink : SystemColors.ControlText;
+            foreach (Control control in dialog.Controls)
+            {
+                var input = control as TextBox;
+                if (input != null)
+                {
+                    input.BackColor = dark ? DesktopTheme.Canvas : input.ReadOnly ? SystemColors.Control : SystemColors.Window;
+                    input.ForeColor = dark ? DesktopTheme.Ink : SystemColors.WindowText;
+                }
+
+                var button = control as Button;
+                if (button == null) continue;
+                button.FlatStyle = dark ? FlatStyle.Flat : FlatStyle.Standard;
+                button.BackColor = dark ? DesktopTheme.Surface : SystemColors.Control;
+                button.UseVisualStyleBackColor = !dark;
+                button.FlatAppearance.BorderColor = dark ? DesktopTheme.Outline : Color.Empty;
+                button.FlatAppearance.MouseOverBackColor = dark ? DesktopTheme.Hover : Color.Empty;
+                button.FlatAppearance.MouseDownBackColor = dark ? DesktopTheme.Pressed : Color.Empty;
+            }
+            DesktopTheme.ApplyTitleBar(dialog);
+        };
+        dialog.HandleCreated += applyTheme;
+        DesktopTheme.Changed += applyTheme;
+        try
+        {
+            applyTheme(dialog, EventArgs.Empty);
+            return ShowAnnotationDialog(dialog.ShowDialog);
+        }
+        finally
+        {
+            DesktopTheme.Changed -= applyTheme;
+            dialog.HandleCreated -= applyTheme;
+        }
     }
 
     private void UpdateVisibility()
@@ -847,7 +896,7 @@ internal sealed class AnnotationController : IDisposable
             dialog.CancelButton = cancel;
             dialog.ActiveControl = input;
             input.SelectAll();
-            return ShowAnnotationDialog(dialog.ShowDialog) == DialogResult.OK ? input.Text : null;
+            return ShowAnnotationDialog(dialog) == DialogResult.OK ? input.Text : null;
         }
     }
 
@@ -1107,7 +1156,7 @@ internal sealed class AnnotationController : IDisposable
             dialog.Controls.AddRange(new Control[] { ok, cancel });
             dialog.AcceptButton = ok;
             dialog.CancelButton = cancel;
-            ShowAnnotationDialog(dialog.ShowDialog);
+            ShowAnnotationDialog(dialog);
         }
     }
 
@@ -1162,6 +1211,7 @@ internal sealed class AnnotationController : IDisposable
     {
         if (disposed) return;
         disposed = true;
+        DesktopTheme.Changed -= ApplyTheme;
         if (escapeKey != null) escapeKey.Dispose();
         FinishGesture();
         SaveBoards();
@@ -1176,14 +1226,14 @@ internal sealed class AnnotationController : IDisposable
 
     private sealed class Palette : Form
     {
-        private static readonly Color Paper = Color.FromArgb(255, 251, 245);
-        private static readonly Color TextInk = Color.FromArgb(37, 39, 53);
-        private static readonly Color Muted = Color.FromArgb(108, 93, 84);
-        private static readonly Color Outline = Color.FromArgb(227, 214, 201);
-        private static readonly Color Hover = Color.FromArgb(245, 234, 222);
-        private static readonly Color Accent = Color.FromArgb(62, 80, 163);
-        private static readonly Color AccentSurface = Color.FromArgb(230, 235, 253);
-        private static readonly Color AccentLine = Color.FromArgb(194, 203, 242);
+        internal static Color Paper { get { return DesktopTheme.IsDark ? DesktopTheme.Paper : Color.FromArgb(255, 251, 245); } }
+        private static Color TextInk { get { return DesktopTheme.IsDark ? DesktopTheme.Ink : Color.FromArgb(37, 39, 53); } }
+        private static Color Muted { get { return DesktopTheme.IsDark ? DesktopTheme.Muted : Color.FromArgb(108, 93, 84); } }
+        private static Color Outline { get { return DesktopTheme.IsDark ? DesktopTheme.Outline : Color.FromArgb(227, 214, 201); } }
+        private static Color Hover { get { return DesktopTheme.IsDark ? DesktopTheme.Hover : Color.FromArgb(245, 234, 222); } }
+        private static Color Accent { get { return DesktopTheme.IsDark ? DesktopTheme.Accent : Color.FromArgb(62, 80, 163); } }
+        private static Color AccentSurface { get { return DesktopTheme.IsDark ? DesktopTheme.SoftAccent : Color.FromArgb(230, 235, 253); } }
+        private static Color AccentLine { get { return DesktopTheme.IsDark ? DesktopTheme.AccentLine : Color.FromArgb(194, 203, 242); } }
         private static readonly PaletteRenderer Renderer = new PaletteRenderer();
 
         private readonly AnnotationController controller;
@@ -1193,6 +1243,7 @@ internal sealed class AnnotationController : IDisposable
         private readonly TableLayoutPanel header;
         private readonly Label title;
         private readonly Label modeLabel;
+        private readonly Button close;
         private readonly ToolStrip tools;
         private readonly ToolStrip actions;
         private readonly ToolStrip boardTools;
@@ -1219,8 +1270,6 @@ internal sealed class AnnotationController : IDisposable
             AutoSizeMode = AutoSizeMode.GrowAndShrink;
             DoubleBuffered = true;
             KeyPreview = true;
-            BackColor = Paper;
-            ForeColor = TextInk;
             Padding = new Padding(12, 7, 12, 9);
             toolbarFont = new Font("Microsoft YaHei UI", 9f);
             titleFont = new Font(toolbarFont.FontFamily, 10.5f, FontStyle.Bold);
@@ -1234,12 +1283,11 @@ internal sealed class AnnotationController : IDisposable
             header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             title = new Label { AutoSize = false, AutoEllipsis = true, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft,
-                Font = titleFont, Margin = new Padding(0, 0, 10, 0), ForeColor = TextInk };
-            modeLabel = new Label { AutoSize = true, Anchor = AnchorStyles.Right, ForeColor = Muted, Margin = new Padding(8, 0, 10, 0) };
-            Button close = new Button { Text = "×", Width = 29, Height = 28, FlatStyle = FlatStyle.Flat,
-                ForeColor = Muted, BackColor = Paper, Margin = Padding.Empty, AccessibleName = "关闭工具栏", UseVisualStyleBackColor = false };
+                Font = titleFont, Margin = new Padding(0, 0, 10, 0) };
+            modeLabel = new Label { AutoSize = true, Anchor = AnchorStyles.Right, Margin = new Padding(8, 0, 10, 0) };
+            close = new Button { Text = "×", Width = 29, Height = 28, FlatStyle = FlatStyle.Flat,
+                Margin = Padding.Empty, AccessibleName = "关闭工具栏", UseVisualStyleBackColor = false };
             close.FlatAppearance.BorderSize = 0;
-            close.FlatAppearance.MouseOverBackColor = Hover;
             close.Click += delegate { controller.SwitchMode(Mode.None); };
             header.Controls.Add(title, 0, 0);
             header.Controls.Add(modeLabel, 1, 0);
@@ -1302,8 +1350,39 @@ internal sealed class AnnotationController : IDisposable
             AddButton(boardTools, "放大", delegate { ZoomFromCenter(1.25f); });
             AddButton(boardTools, "缩小", delegate { ZoomFromCenter(0.8f); });
             AddButton(boardTools, "复位视图", controller.ResetView);
-            status = new ToolStripLabel { ForeColor = Color.DarkRed };
+            status = new ToolStripLabel();
             boardTools.Items.Add(status);
+            ApplyTheme();
+        }
+
+        internal void ApplyTheme()
+        {
+            BackColor = rows.BackColor = header.BackColor = close.BackColor = Paper;
+            ForeColor = title.ForeColor = TextInk;
+            modeLabel.ForeColor = close.ForeColor = Muted;
+            close.FlatAppearance.MouseOverBackColor = Hover;
+            close.FlatAppearance.MouseDownBackColor = DesktopTheme.IsDark ? DesktopTheme.Pressed : Color.Empty;
+            foreach (ToolStrip row in new[] { tools, actions, boardTools })
+            {
+                row.BackColor = Paper;
+                row.ForeColor = TextInk;
+                foreach (ToolStripItem item in row.Items)
+                {
+                    var button = item as ToolStripButton;
+                    item.ForeColor = button != null && button.Checked ? Accent : TextInk;
+                    var menu = item as ToolStripDropDownButton;
+                    if (menu == null) continue;
+                    menu.DropDown.Renderer = Renderer;
+                    menu.DropDown.BackColor = DesktopTheme.IsDark ? Paper : Color.Empty;
+                    foreach (ToolStripItem option in menu.DropDownItems)
+                        option.ForeColor = DesktopTheme.IsDark ? TextInk : Color.Empty;
+                    menu.DropDown.Invalidate();
+                }
+                row.Invalidate();
+            }
+            status.ForeColor = DesktopTheme.IsDark ? DesktopTheme.Error : Color.DarkRed;
+            UpdateSwatch(true);
+            Invalidate();
         }
 
         internal void AttachTools(Control container)
@@ -1319,7 +1398,7 @@ internal sealed class AnnotationController : IDisposable
         {
             return new ToolStrip { GripStyle = ToolStripGripStyle.Hidden, LayoutStyle = ToolStripLayoutStyle.HorizontalStackWithOverflow,
                 Dock = DockStyle.None, AutoSize = true, CanOverflow = false, Margin = new Padding(0, 2, 0, 0),
-                Padding = Padding.Empty, BackColor = Paper, ForeColor = TextInk, Renderer = Renderer };
+                Padding = Padding.Empty, Renderer = Renderer };
         }
 
         private static Padding ItemPadding() { return new Padding(7, 4, 7, 4); }
@@ -1410,9 +1489,9 @@ internal sealed class AnnotationController : IDisposable
                 item.Checked = (int)item.Tag == controller.eraserSize;
         }
 
-        private void UpdateSwatch()
+        private void UpdateSwatch(bool force = false)
         {
-            if (color.Image != null && swatchColor == controller.ink) return;
+            if (!force && color.Image != null && swatchColor == controller.ink) return;
             Image previous = color.Image;
             Bitmap image = new Bitmap(14, 14, PixelFormat.Format32bppPArgb);
             using (Graphics graphics = Graphics.FromImage(image))
@@ -1485,13 +1564,53 @@ internal sealed class AnnotationController : IDisposable
         {
             protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e)
             {
-                if (e.ToolStrip is ToolStripDropDown) base.OnRenderToolStripBackground(e);
+                if (e.ToolStrip is ToolStripDropDown && !DesktopTheme.IsDark) base.OnRenderToolStripBackground(e);
                 else e.Graphics.Clear(Paper);
             }
 
             protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
             {
-                if (e.ToolStrip is ToolStripDropDown) base.OnRenderToolStripBorder(e);
+                if (!(e.ToolStrip is ToolStripDropDown)) return;
+                if (!DesktopTheme.IsDark) { base.OnRenderToolStripBorder(e); return; }
+                using (var border = new Pen(Outline))
+                    e.Graphics.DrawRectangle(border, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
+            }
+
+            protected override void OnRenderImageMargin(ToolStripRenderEventArgs e)
+            {
+                if (!DesktopTheme.IsDark) { base.OnRenderImageMargin(e); return; }
+                using (var fill = new SolidBrush(Paper)) e.Graphics.FillRectangle(fill, e.AffectedBounds);
+            }
+
+            protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e)
+            {
+                if (!DesktopTheme.IsDark) { base.OnRenderMenuItemBackground(e); return; }
+                PaintButton(e.Graphics, e.Item, false);
+            }
+
+            protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)
+            {
+                if (DesktopTheme.IsDark) e.ArrowColor = e.Item.Enabled ? TextInk : Muted;
+                base.OnRenderArrow(e);
+            }
+
+            protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e)
+            {
+                if (DesktopTheme.IsDark && !e.Item.Enabled) e.TextColor = Muted;
+                base.OnRenderItemText(e);
+            }
+
+            protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e)
+            {
+                if (!DesktopTheme.IsDark) { base.OnRenderItemCheck(e); return; }
+                Rectangle mark = e.ImageRectangle;
+                using (var pen = new Pen(Accent, 2) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+                    e.Graphics.DrawLines(pen, new[]
+                    {
+                        new PointF(mark.Left + mark.Width * 0.22f, mark.Top + mark.Height * 0.53f),
+                        new PointF(mark.Left + mark.Width * 0.43f, mark.Top + mark.Height * 0.73f),
+                        new PointF(mark.Left + mark.Width * 0.79f, mark.Top + mark.Height * 0.26f)
+                    });
             }
 
             protected override void OnRenderButtonBackground(ToolStripItemRenderEventArgs e)
@@ -1595,6 +1714,13 @@ internal sealed class AnnotationController : IDisposable
             Text = "白板侧栏";
             ClientSize = Panel.Size;
             Controls.Add(Panel);
+            ApplyTheme();
+        }
+
+        internal void ApplyTheme()
+        {
+            Panel.ApplyTheme();
+            BackColor = Panel.BackColor;
         }
 
         internal void Place(Rectangle area)
@@ -1633,13 +1759,28 @@ internal sealed class AnnotationController : IDisposable
             Panel = controller.NewBoardSidebar();
             Panel.Dock = DockStyle.Left;
             Tools = new Panel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
-                BackColor = Color.FromArgb(255, 251, 245), Padding = new Padding(8, 4, 8, 4) };
+                Padding = new Padding(8, 4, 8, 4) };
             Canvas = new BoardCanvas(controller) { Dock = DockStyle.Fill };
             Panel body = new Panel { Dock = DockStyle.Fill };
             body.Controls.Add(Canvas);
             body.Controls.Add(Tools);
             Controls.Add(body);
             Controls.Add(Panel);
+            ApplyTheme();
+        }
+
+        internal void ApplyTheme()
+        {
+            BackColor = DesktopTheme.IsDark ? DesktopTheme.Surface : SystemColors.Control;
+            Tools.BackColor = Palette.Paper;
+            Panel.ApplyTheme();
+            DesktopTheme.ApplyTitleBar(this);
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            DesktopTheme.ApplyTitleBar(this);
         }
 
         internal void UpdateState()

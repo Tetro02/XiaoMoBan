@@ -20,7 +20,11 @@ internal sealed class AnnotationController : IDisposable
     private static readonly int[] EraserSizes = { 8, 14, 20, 30, 44, 64, 96 };
     private static readonly string[] HotkeyNames = { "屏幕批注", "白板", "撤销批注" };
     private static readonly int[] HotkeyIds = { FirstHotkey, FirstHotkey + 1, FirstHotkey + 5 };
-    private static readonly Color BoardBackground = Color.FromArgb(248, 249, 252);
+    private static readonly Color LightBoardPaper = Color.FromArgb(248, 249, 252);
+    private static readonly double DarkInkMinLuminance = 4.5 * (Luminance(
+        LinearChannel(DesktopTheme.Canvas.R), LinearChannel(DesktopTheme.Canvas.G),
+        LinearChannel(DesktopTheme.Canvas.B)) + 0.05) - 0.05;
+    private static Color BoardBackground { get { return DesktopTheme.IsDark ? DesktopTheme.Canvas : LightBoardPaper; } }
 
     private enum Mode { None, Screen, Board }
     internal enum Tool { Ink, Line, Arrow, Rectangle, Ellipse, Text, Eraser, Pan }
@@ -155,9 +159,11 @@ internal sealed class AnnotationController : IDisposable
         if (palette != null && !palette.IsDisposed) palette.ApplyTheme();
         if (sidebar != null && !sidebar.IsDisposed) sidebar.ApplyTheme();
         if (boardWindow != null && !boardWindow.IsDisposed) boardWindow.ApplyTheme();
+        if (Whiteboard) InvalidateLayers();
     }
 
     private Document Current { get { return mode == Mode.Board ? boards[boardIndex] : screen; } }
+    private bool DarkBoard { get { return Whiteboard && DesktopTheme.IsDark; } }
     private bool CapturesInput { get { return mode != Mode.None && !clickThrough; } }
     private float ViewZoom { get { return mode == Mode.Board ? zoom : screenZoom; } }
     private PointF ViewPan { get { return mode == Mode.Board ? pan : screenPan; } }
@@ -718,7 +724,7 @@ internal sealed class AnnotationController : IDisposable
         {
             GraphicsState view = graphics.Save();
             SetDocumentTransform(graphics);
-            PaintMark(graphics, live);
+            PaintMark(graphics, live, darkBoard: DarkBoard);
             graphics.Restore(view);
         }
         PaintErasePreview(graphics);
@@ -741,8 +747,9 @@ internal sealed class AnnotationController : IDisposable
         SetDocumentTransform(graphics);
         // Fit the board's coordinates to the window without changing its pen width.
         float strokeWidthScale = 1 / viewport.Scale;
-        foreach (Mark mark in Current.Marks) PaintMark(graphics, mark, strokeWidthScale);
-        if (live != null) PaintMark(graphics, live, strokeWidthScale);
+        bool darkBoard = DarkBoard;
+        foreach (Mark mark in Current.Marks) PaintMark(graphics, mark, strokeWidthScale, darkBoard);
+        if (live != null) PaintMark(graphics, live, strokeWidthScale, darkBoard);
     }
 
     private void PaintBoardWindowPreview(Graphics graphics, BoardViewport viewport)
@@ -781,22 +788,53 @@ internal sealed class AnnotationController : IDisposable
 
     private static float LineWidth(float width, float pressure) { return width * (0.22f + 1.25f * pressure); }
 
-    private static void PaintMark(Graphics graphics, Mark mark, float strokeWidthScale = 1)
+    private static Color DarkBoardInk(Color color)
+    {
+        double red = LinearChannel(color.R);
+        double green = LinearChannel(color.G);
+        double blue = LinearChannel(color.B);
+        double luminance = Luminance(red, green, blue);
+        if (luminance >= DarkInkMinLuminance) return color;
+
+        // Mix toward white in linear RGB for display only. Saved marks keep their original colors.
+        double lift = (DarkInkMinLuminance - luminance) / (1 - luminance);
+        return Color.FromArgb(color.A, SrgbChannel(red + (1 - red) * lift),
+            SrgbChannel(green + (1 - green) * lift), SrgbChannel(blue + (1 - blue) * lift));
+    }
+
+    private static double Luminance(double red, double green, double blue)
+    {
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+    }
+
+    private static double LinearChannel(int component)
+    {
+        double value = component / 255.0;
+        return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+    }
+
+    private static int SrgbChannel(double value)
+    {
+        double encoded = value <= 0.0031308 ? value * 12.92 : 1.055 * Math.Pow(value, 1 / 2.4) - 0.055;
+        return Math.Min(255, (int)Math.Ceiling(255 * encoded));
+    }
+
+    private static void PaintMark(Graphics graphics, Mark mark, float strokeWidthScale = 1, bool darkBoard = false)
     {
         Sample first = mark.Points[0];
         PointF start = first.Position;
         PointF end = mark.Points[mark.Points.Count - 1].Position;
+        bool erase = mark.Tool == Tool.Eraser;
+        Color color = erase ? Color.Transparent : darkBoard ? DarkBoardInk(mark.Color) : mark.Color;
         if (mark.Tool == Tool.Text)
         {
             using (Font font = new Font(SystemFonts.MessageBoxFont.FontFamily, FontSize(mark), FontStyle.Regular, GraphicsUnit.Pixel))
-            using (SolidBrush brush = new SolidBrush(mark.Color)) graphics.DrawString(mark.Text, font, brush, start);
+            using (SolidBrush brush = new SolidBrush(color)) graphics.DrawString(mark.Text, font, brush, start);
             return;
         }
 
-        bool erase = mark.Tool == Tool.Eraser;
         // Erasers always modify a transparent ink buffer. Drawing their
         // antialiased caps onto the opaque canvas can create visible fringes.
-        Color color = erase ? Color.Transparent : mark.Color;
         float strokeWidth = erase ? mark.Width : mark.Width * strokeWidthScale;
         if (erase) graphics.CompositingMode = CompositingMode.SourceCopy;
         using (Pen pen = new Pen(color, strokeWidth))
@@ -1772,6 +1810,7 @@ internal sealed class AnnotationController : IDisposable
         internal void ApplyTheme()
         {
             BackColor = DesktopTheme.IsDark ? DesktopTheme.Surface : SystemColors.Control;
+            Canvas.BackColor = BoardBackground;
             Tools.BackColor = Palette.Paper;
             Panel.ApplyTheme();
             DesktopTheme.ApplyTitleBar(this);
@@ -1856,7 +1895,7 @@ internal sealed class AnnotationController : IDisposable
 
         protected override void OnPaintBackground(PaintEventArgs e)
         {
-            using (var brush = new SolidBrush(BoardBackground)) e.Graphics.FillRectangle(brush, e.ClipRectangle);
+            using (var brush = new SolidBrush(BackColor)) e.Graphics.FillRectangle(brush, e.ClipRectangle);
         }
 
         protected override void OnVisibleChanged(EventArgs e)
@@ -1908,6 +1947,7 @@ internal sealed class AnnotationController : IDisposable
         private PointF cachedPan;
         private float cachedZoom;
         private int cachedRevision;
+        private bool cachedDarkBoard;
         private int renderedMarks;
 
         internal Surface(AnnotationController controller, Rectangle display)
@@ -2019,7 +2059,9 @@ internal sealed class AnnotationController : IDisposable
             Document document = controller.Current;
             float zoom = controller.ViewZoom;
             PointF pan = controller.ViewPan;
-            bool reset = cachedDocument != document || cachedRevision != document.Revision || cachedZoom != zoom || cachedPan != pan;
+            bool darkBoard = controller.DarkBoard;
+            bool reset = cachedDocument != document || cachedRevision != document.Revision || cachedZoom != zoom
+                || cachedPan != pan || cachedDarkBoard != darkBoard;
             if (!reset && renderedMarks == document.Marks.Count) return;
             if (committed == null)
                 committed = new Bitmap(DisplayBounds.Width, DisplayBounds.Height, PixelFormat.Format32bppPArgb);
@@ -2035,7 +2077,7 @@ internal sealed class AnnotationController : IDisposable
                 controller.SetDocumentTransform(graphics);
                 while (renderedMarks < document.Marks.Count)
                 {
-                    PaintMark(graphics, document.Marks[renderedMarks]);
+                    PaintMark(graphics, document.Marks[renderedMarks], darkBoard: darkBoard);
                     renderedMarks++;
                 }
             }
@@ -2043,6 +2085,7 @@ internal sealed class AnnotationController : IDisposable
             cachedRevision = document.Revision;
             cachedZoom = zoom;
             cachedPan = pan;
+            cachedDarkBoard = darkBoard;
         }
 
         protected override void WndProc(ref Message message)

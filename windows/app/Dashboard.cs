@@ -36,6 +36,7 @@ namespace PenNoteBridge
 
         readonly ThemeLabel status = LabelFor("准备连接");
         readonly ThemeLabel lanState = LabelFor("");
+        readonly Label lanHint = Paragraph("");
         readonly ThemeLabel usbState = LabelFor("");
         readonly Label usbScanStatus = Paragraph("");
         readonly Label hidState = LabelFor("");
@@ -192,7 +193,7 @@ namespace PenNoteBridge
             TableLayoutPanel body;
             var view = ConnectionCard(0, out body, 36, 37, 25, 44, 23, 38, -1);
             body.Controls.Add(Title("在同一网络连接", 17F), 0, 0);
-            body.Controls.Add(Paragraph("首次连接可输入六位连接码，或用平板扫描连接二维码。"), 0, 1);
+            body.Controls.Add(lanHint, 0, 1);
             body.Controls.Add(LabelFor("本地连接码", true), 0, 2);
             pin.Font = new Font("Consolas", 23F, FontStyle.Bold);
             pin.SetTone(LabelTone.Accent);
@@ -403,11 +404,14 @@ namespace PenNoteBridge
                 var config = Map(At(snapshot, "config"));
                 var active = Map(At(snapshot, "running"));
                 bool lanRunning = BoolAt(active, "lan"), usbRunning = BoolAt(active, "usb"), sppRunning = BoolAt(active, "bluetooth");
+                int lanPort = (int)NumberAt(snapshot, "lanPort", 0);
+                bool alternateLan = lanRunning && lanPort > 0 && lanPort != DesktopHost.DefaultLanPort;
                 string wiredWinner = StringAt(snapshot, "wiredWinner");
                 string lanError = !lanRunning && wiredWinner != "usb" ? StringAt(snapshot, "lanError") : "";
                 string usbError = !usbRunning && wiredWinner != "lan" ? StringAt(snapshot, "usbError") : "";
                 SetConnectionState(lanState, lanRunning, wiredWinner == "usb", lanError,
-                    "●  局域网已开启", "○  USB 已连接，局域网暂停", "○  局域网已停止");
+                    alternateLan ? "●  局域网端口 " + lanPort : "●  局域网已开启",
+                    "○  USB 已连接，局域网暂停", "○  局域网已停止");
                 SetConnectionState(usbState, usbRunning, wiredWinner == "lan", usbError,
                     "●  USB 接收已开启", "○  局域网已连接，USB 暂停", "○  USB 接收已停止");
                 lanStart.Visible = !lanRunning && wiredWinner != "usb";
@@ -417,6 +421,9 @@ namespace PenNoteBridge
                 bluetoothHidState.Text = StringAt(snapshot, "bluetoothHidStatus");
 
                 bool pairingAvailable = At(snapshot, "pairingAvailable") == null || BoolAt(snapshot, "pairingAvailable");
+                lanHint.Text = alternateLan
+                    ? pairingAvailable ? "请用新版平板端扫码或输入六位连接码。" : "请用新版平板端扫描连接二维码。"
+                    : "首次连接可输入六位连接码，或用平板扫描连接二维码。";
                 string pairingError = lanRunning && !pairingAvailable ? StringAt(snapshot, "pairingError") : "";
                 canRenew = lanRunning && pairingAvailable;
                 code = canRenew ? StringAt(snapshot, "shortPairingCode") : "";
@@ -427,7 +434,7 @@ namespace PenNoteBridge
                     "点击刷新生成连接码" : lanRunning ? "六位码不可用 · 请使用二维码" : "开启局域网后生成";
                 expiry.SetTone(pairingError.Length > 0 ? LabelTone.Error : LabelTone.Quiet);
                 SetConnectionDetails(expiry, pairingError);
-                if (canRenew && At(snapshot, "discoveryEnabled") is bool && !BoolAt(snapshot, "discoveryEnabled"))
+                if (!alternateLan && canRenew && At(snapshot, "discoveryEnabled") is bool && !BoolAt(snapshot, "discoveryEnabled"))
                     lanState.Text = "●  局域网已开启，可手动输入电脑 IPv4";
                 bluetoothCode = StringAt(snapshot, "bluetoothCode");
                 if (bluetoothCode.Length == 0) bluetoothCode = StringAt(snapshot, "code");
@@ -688,7 +695,9 @@ namespace PenNoteBridge
             if (matrix == null) SetStatus("无法显示二维码，请复制连接码", true);
             using (var dialog = MakeDialog("局域网配对", new Size(359, matrix == null ? 145 : 388)))
             {
-                var tip = Paragraph("在平板的局域网连接页面扫描二维码。");
+                bool alternateLan = payload != null && payload.StartsWith("PNB2|", StringComparison.Ordinal);
+                var tip = Paragraph(alternateLan ? "请用新版小墨板扫描二维码，二维码包含备用端口。"
+                    : "在平板的局域网连接页面扫描二维码。");
                 tip.Dock = DockStyle.Top;
                 tip.Height = 43;
                 var copy = ButtonFor("复制完整连接码", true);

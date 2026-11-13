@@ -702,8 +702,17 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
                 code.setError("请输入电脑显示的六位配对码");
                 return;
             }
+            BridgeDiscovery.Computer computer = null;
+            for (BridgeDiscovery.Computer candidate : computers) {
+                if (address.equalsIgnoreCase(candidate.host)) {
+                    computer = candidate;
+                    break;
+                }
+            }
+            int pairingPort = computer == null ? LanPairing.PORT : computer.port;
+            boolean requirePort = computer != null && computer.lanPort != BridgeProfile.LAN_PORT;
             dialog.dismiss();
-            beginPair("正在验证局域网配对码…", () -> LanPairing.pair(address, LanPairing.PORT, value));
+            beginPair("正在验证局域网配对码…", () -> LanPairing.pair(address, pairingPort, value, requirePort));
         });
     }
 
@@ -712,14 +721,16 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         String pin = prefs.getString("bridge_pin", "").replaceAll("[\\s:]", "");
         String token = prefs.getString("bridge_code", "");
         if (parseFingerprint(pin) == null || !BridgeProfile.isCode(token)) return null;
-        if (address.equalsIgnoreCase(prefs.getString("bridge_host", ""))) {
-            return new BridgeProfile(address, pin, token);
-        }
         for (BridgeDiscovery.Computer computer : computers) {
             // Discovery locates the computer. PenLink still authenticates its saved TLS certificate.
             if (address.equalsIgnoreCase(computer.host) && pin.equalsIgnoreCase(computer.fingerprint)) {
-                return new BridgeProfile(address, pin, token);
+                return new BridgeProfile(address, pin, token, computer.lanPort);
             }
+        }
+        if (address.equalsIgnoreCase(prefs.getString("bridge_host", ""))) {
+            int port = prefs.getInt("bridge_port", BridgeProfile.LAN_PORT);
+            if (port < 1 || port > 65535) port = BridgeProfile.LAN_PORT;
+            return new BridgeProfile(address, pin, token, port);
         }
         return null;
     }
@@ -753,8 +764,8 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         autoUsb = false;
         prefs.edit().putBoolean("auto_official_usb", false)
                 .putString("bridge_host", profile.host).putString("bridge_pin", profile.fingerprint)
-                .putString("bridge_code", profile.code).apply();
-        connect(profile.host, false, parseFingerprint(profile.fingerprint), profile.code);
+                .putString("bridge_code", profile.code).putInt("bridge_port", profile.port).apply();
+        connect(profile.host, profile.port, false, parseFingerprint(profile.fingerprint), profile.code);
     }
 
     private void showOnlinePairing() {
@@ -1121,7 +1132,7 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
             disconnect("首次使用 USB，请先配对小墨板电脑端");
             return;
         }
-        connect("127.0.0.1", true, fingerprint, "");
+        connect("127.0.0.1", BridgeProfile.USB_PORT, true, fingerprint, "");
     }
 
     private static byte[] parseFingerprint(String value) {
@@ -1149,11 +1160,10 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         return field;
     }
 
-    private void connect(String address, boolean usb, byte[] fingerprint, String pairingCode) {
+    private void connect(String address, int port, boolean usb, byte[] fingerprint, String pairingCode) {
         String waiting = usb ? "等待 USB，请在电脑端选择平板" : "正在连接局域网…";
         disconnect(waiting);
         Route route = usb ? Route.USB : Route.LAN;
-        int port = usb ? BridgeProfile.USB_PORT : BridgeProfile.LAN_PORT;
         setConnection(waiting, PenLink.State.WAITING, route);
         disconnectButton.setVisibility(View.VISIBLE);
         link = new PenLink(address, usb, fingerprint, clientId, Build.MODEL, port, pairingCode, new PenLink.Listener() {

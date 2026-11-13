@@ -78,10 +78,16 @@ namespace PenNoteBridge
         private static byte[] EncodePayload(string payload)
         {
             string[] fields = (payload ?? "").Split('|');
+            bool legacy = fields.Length == 4 && fields[0] == "PNB1";
+            ushort port;
+            bool portAware = fields.Length == 5 && fields[0] == "PNB2"
+                && UInt16.TryParse(fields[2], NumberStyles.None, CultureInfo.InvariantCulture, out port)
+                && port != 0 && fields[2] == port.ToString(CultureInfo.InvariantCulture);
+            int fingerprintIndex = portAware ? 3 : 2;
             IPAddress ip;
-            if (fields.Length != 4 || fields[0] != "PNB1" || !IPAddress.TryParse(fields[1], out ip) ||
+            if ((!legacy && !portAware) || !IPAddress.TryParse(fields[1], out ip) ||
                 ip.AddressFamily != AddressFamily.InterNetwork || fields[1] != ip.ToString() ||
-                !Fingerprint.IsMatch(fields[2]) || !Token.IsMatch(fields[3]))
+                !Fingerprint.IsMatch(fields[fingerprintIndex]) || !Token.IsMatch(fields[fingerprintIndex + 1]))
                 throw new ArgumentException("配对信息无效。请选择可从平板访问的 IPv4 地址。");
             return Encoding.ASCII.GetBytes(payload);
         }

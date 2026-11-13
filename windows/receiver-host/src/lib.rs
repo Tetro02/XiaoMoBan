@@ -26,6 +26,8 @@ mod pairing;
 
 mod bluetooth;
 
+const ALTERNATE_LAN_PORT: u16 = 57214;
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, rename_all = "camelCase")]
 pub(crate) struct Config {
@@ -190,7 +192,7 @@ impl Host {
             .and_then(|grpc| grpc.lan_address().map(|address| (address, grpc.lan_stopped(), grpc.lan_stopped())))
         {
             let fingerprint = self.identity.fingerprint_sha256();
-            match self.runtime.block_on(pairing::Pairing::start(config.pairing_port, fingerprint, &self.code, pairing_stopped)) {
+            match self.runtime.block_on(pairing::Pairing::start(config.pairing_port, lan.port(), fingerprint, &self.code, pairing_stopped)) {
                 Ok(pairing) => {
                     if config.discovery_enabled {
                         match discovery::Discovery::start(pairing.address.port(), lan.port(), fingerprint) {
@@ -236,6 +238,7 @@ impl Host {
             lan_access: if config.lan_enabled { LanAccess::PairingCode(self.code.clone()) } else { LanAccess::Disabled },
             display: config.display(),
         };
+        let mut switched_lan_port = false;
         let mut switched_usb_port = false;
         while options.lan.is_some() || options.usb.is_some() {
             let signal = self.signal.clone();
@@ -243,6 +246,9 @@ impl Host {
                 .first_wired_transport_wins(config.first_wired_transport_wins);
             match self.runtime.block_on(receiver.start(self.identity.clone(), options.clone())) {
                 Ok(grpc) => {
+                    if let Some(address) = grpc.lan_address().filter(|_| switched_lan_port) {
+                        self.signal.log(format!("局域网 TCP 端口 {DEFAULT_LAN_PORT} 已被占用，已改用端口 {}。", address.port()));
+                    }
                     if let Some(address) = grpc.usb_address().filter(|_| switched_usb_port) {
                         self.signal.log(format!("USB TCP 端口 {DEFAULT_USB_PORT} 已被占用，已改用本机端口 {}。", address.port()));
                     }
@@ -256,6 +262,19 @@ impl Host {
                         return Err(message);
                     };
                     match bind.transport {
+                        Transport::Lan if config.lan_port == DEFAULT_LAN_PORT && bind.error.kind() == ErrorKind::AddrInUse
+                            && matches!(bind.address.port(), DEFAULT_LAN_PORT | ALTERNATE_LAN_PORT) =>
+                        {
+                            let next_port = if bind.address.port() == DEFAULT_LAN_PORT
+                                && config.usb_port != ALTERNATE_LAN_PORT && config.pairing_port != ALTERNATE_LAN_PORT
+                            {
+                                ALTERNATE_LAN_PORT
+                            } else {
+                                0
+                            };
+                            options.lan = Some(SocketAddr::from((Ipv4Addr::UNSPECIFIED, next_port)));
+                            switched_lan_port = true;
+                        }
                         Transport::Lan => {
                             options.lan = None;
                             options.lan_access = LanAccess::Disabled;
@@ -378,7 +397,16 @@ impl Host {
     fn pairing(&self, address: &str) -> Result<Value, String> {
         use std::fmt::Write as _;
         let address: Ipv4Addr = address.parse().map_err(|_| "请选择电脑 IPv4 地址")?;
-        let payload = format!("PNB1|{address}|{}|{}", self.identity.fingerprint_sha256(), self.code);
+        let services = self.services.lock().unwrap();
+        let lan = services.grpc.as_ref().and_then(RunningReceiver::lan_address)
+            .ok_or("请先开启局域网接收")?;
+        let port = lan.port();
+        let fingerprint = self.identity.fingerprint_sha256();
+        let payload = if port == DEFAULT_LAN_PORT {
+            format!("PNB1|{address}|{fingerprint}|{}", self.code)
+        } else {
+            format!("PNB2|{address}|{port}|{fingerprint}|{}", self.code)
+        };
         let code = qrcode::QrCode::new(payload.as_bytes()).map_err(|error| error.to_string())?;
         let width = code.width();
         let size = width + 8;

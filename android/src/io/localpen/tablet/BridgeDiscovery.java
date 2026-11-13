@@ -22,6 +22,7 @@ final class BridgeDiscovery implements AutoCloseable {
         final String host;
         final String fingerprint;
         final int port;
+        final int lanPort;
 
         Computer(NsdServiceInfo info, InetAddress host) {
             name = info.getServiceName();
@@ -29,6 +30,9 @@ final class BridgeDiscovery implements AutoCloseable {
             port = info.getPort();
             byte[] pin = info.getAttributes().get("fp");
             fingerprint = pin == null ? "" : new String(pin, StandardCharsets.US_ASCII);
+            byte[] grpc = info.getAttributes().get("grpc");
+            lanPort = grpc == null ? BridgeProfile.LAN_PORT
+                    : BridgeProfile.parsePort(new String(grpc, StandardCharsets.US_ASCII));
         }
 
         @Override public String toString() { return name + "  ·  " + host; }
@@ -104,8 +108,11 @@ final class BridgeDiscovery implements AutoCloseable {
             resolving = false;
             if (closed) return;
             if (info != null && info.getHost() instanceof Inet4Address && info.getPort() == LanPairing.PORT) {
-                found.put(info.getServiceName(), new Computer(info, info.getHost()));
-                publish();
+                Computer computer = new Computer(info, info.getHost());
+                if (computer.lanPort != 0) {
+                    found.put(info.getServiceName(), computer);
+                    publish();
+                }
             }
             resolve();
         });

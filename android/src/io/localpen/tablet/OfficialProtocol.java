@@ -36,7 +36,7 @@ final class OfficialProtocol {
 
     static byte[] handshake(String device) {
         Encoder e = new Encoder();
-        e.text(1, "XiaoMoBan 0.6.3");
+        e.text(1, "XiaoMoBan 0.6.7");
         e.bytes(2, new byte[] {1, 2});
         e.text(3, device);
         e.text(4, "android");

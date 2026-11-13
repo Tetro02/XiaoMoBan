@@ -16,6 +16,10 @@
 2. 使用局域网时，让两台设备连接同一网络。开启电脑端局域网接收，在平板扫码或输入六位配对码。
 3. 使用 USB 时，先完成一次小墨板电脑端配对。解压官方 Platform-Tools，把 `platform-tools` 放到 EXE 旁边，或在小墨板的「USB」页选中 `adb.exe`。插入数据线，解锁平板并授权 USB 调试。 [Android Platform-Tools](https://developer.android.google.cn/tools/releases/platform-tools?hl=zh-cn)
 
+## 局域网端口
+
+从 0.6.7 起，桌面端会在默认 TCP 端口 57211 被占用时尝试 57214。如果 57214 也被占用，Windows 会分配一个空闲端口。桌面端「局域网」页会显示切换后的端口。使用备用端口时，请同时升级平板端，然后扫码、使用六位配对码，或选择自动发现的电脑重新连接。
+
 ## 首发测试状态
 
 实机 USB 测试使用 Galaxy Tab S7+ 和 Windows 11 x64。Windows EXE 为未签名的便携程序，蓝牙 HID 直连仍是测试功能。使用说明、SHA-256 校验值和第三方许可随首发包提供。

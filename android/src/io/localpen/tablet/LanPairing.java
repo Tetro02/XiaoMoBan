@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.math.BigInteger;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.net.SocketException;
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
@@ -28,12 +29,28 @@ final class LanPairing {
             "94B5C803D89F7AE435DE236D525F54759B65E372FCD68EF20FA7111F9E4AFF73";
     private static final BigInteger N = new BigInteger(N_HEX, 16);
     private static final BigInteger G = BigInteger.valueOf(2);
-    private static final byte[] MAGIC = ascii("PNB1");
+    private static final byte[] LEGACY_MAGIC = ascii("PNB1");
+    private static final byte[] PORT_MAGIC = ascii("PNB2");
     private static final byte[] ID = ascii("PenNoteBridge");
     private static final SecureRandom RANDOM = new SecureRandom();
 
     static BridgeProfile pair(String host, int port, String code) throws IOException, GeneralSecurityException {
+        return pair(host, port, code, false);
+    }
+
+    static BridgeProfile pair(String host, int port, String code, boolean requirePort)
+            throws IOException, GeneralSecurityException {
         if (!code.matches("[0-9]{6}")) throw new IllegalArgumentException("请输入电脑显示的六位配对码");
+        try {
+            return exchange(host, port, code, PORT_MAGIC);
+        } catch (NoChallenge error) {
+            if (requirePort) throw error;
+            return exchange(host, port, code, LEGACY_MAGIC);
+        }
+    }
+
+    private static BridgeProfile exchange(String host, int port, String code, byte[] magic)
+            throws IOException, GeneralSecurityException {
         BigInteger a;
         do { a = new BigInteger(256, RANDOM); } while (a.signum() == 0);
         byte[] clientPublic = pad(G.modPow(a, N));
@@ -42,13 +59,13 @@ final class LanPairing {
             socket.setSoTimeout(5000);
             socket.setTcpNoDelay(true);
             OutputStream output = socket.getOutputStream();
-            byte[] hello = new byte[MAGIC.length + clientPublic.length];
-            System.arraycopy(MAGIC, 0, hello, 0, MAGIC.length);
-            System.arraycopy(clientPublic, 0, hello, MAGIC.length, clientPublic.length);
+            byte[] hello = new byte[magic.length + clientPublic.length];
+            System.arraycopy(magic, 0, hello, 0, magic.length);
+            System.arraycopy(clientPublic, 0, hello, magic.length, clientPublic.length);
             output.write(hello);
             output.flush();
             DataInputStream input = new DataInputStream(socket.getInputStream());
-            byte[] salt = read(input, 16);
+            byte[] salt = readSalt(input);
             byte[] serverPublic = read(input, 256);
             BigInteger bPublic = unsigned(serverPublic);
             if (bPublic.signum() == 0 || bPublic.compareTo(N) >= 0) throw new IOException("配对回复无效");
@@ -74,11 +91,34 @@ final class LanPairing {
             byte[] nonce = read(input, 12);
             cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(hash(ascii("PNB1 credential encryption"), key), "AES"),
                     new GCMParameterSpec(128, nonce));
-            cipher.updateAAD(MAGIC);
-            String credentials = new String(cipher.doFinal(read(input, 104)), StandardCharsets.US_ASCII);
+            cipher.updateAAD(magic);
+            boolean hasPort = magic == PORT_MAGIC;
+            byte[] record = cipher.doFinal(read(input, hasPort ? 106 : 104));
+            String credentials = new String(record, 0, 88, StandardCharsets.US_ASCII);
             if (!credentials.matches("[0-9A-Fa-f]{88}")) throw new IOException("配对资料无效");
-            return new BridgeProfile(host, credentials.substring(0, 64), credentials.substring(64));
+            int lanPort = hasPort ? ((record[88] & 255) << 8) | (record[89] & 255) : BridgeProfile.LAN_PORT;
+            if (lanPort == 0) throw new IOException("电脑返回的局域网端口无效");
+            return new BridgeProfile(host, credentials.substring(0, 64), credentials.substring(64), lanPort);
         }
+    }
+
+    private static final class NoChallenge extends IOException {
+        NoChallenge(Throwable cause) { super("电脑未返回配对资料", cause); }
+    }
+
+    private static byte[] readSalt(DataInputStream input) throws IOException {
+        // Legacy receivers close the connection on an unknown magic without sending a challenge.
+        int first;
+        try {
+            first = input.read();
+        } catch (SocketException error) {
+            throw new NoChallenge(error);
+        }
+        if (first == -1) throw new NoChallenge(null);
+        byte[] salt = new byte[16];
+        salt[0] = (byte) first;
+        input.readFully(salt, 1, salt.length - 1);
+        return salt;
     }
 
     private static byte[] ascii(String value) { return value.getBytes(StandardCharsets.US_ASCII); }

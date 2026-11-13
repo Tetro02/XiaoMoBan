@@ -13,6 +13,7 @@ namespace PenNoteBridge
 {
     internal sealed class DesktopHost : IDisposable
     {
+        internal const int DefaultLanPort = 57211;
         readonly object gate = new object();
         readonly object logGate = new object();
         readonly Receiver receiver;
@@ -23,6 +24,7 @@ namespace PenNoteBridge
         Dictionary<string, object> options;
         string lastArea;
         string onlineCode = "";
+        string onlineLanAddress;
         DateTime onlineUntil;
         bool automaticWired;
         bool winnerEmptyLastPoll;
@@ -74,6 +76,9 @@ namespace PenNoteBridge
                     lastArea = area;
                 }
                 var state = receiver.Snapshot();
+                string lanAddress = Text(state, "lanAddress", "");
+                int lanPort = ListenerPort(lanAddress);
+                bool onlineAvailable = lanPort > 0 && lanAddress == onlineLanAddress && onlineUntil > DateTime.UtcNow;
                 var diagnostics = Dictionary(Read(state, "diagnostics"));
                 var clients = Items(Read(state, "clients")).ToArray();
                 bool running = Flag(state, "running");
@@ -98,14 +103,15 @@ namespace PenNoteBridge
                     {"shortPairingCode", Read(state, "shortPairingCode")},
                     {"pairingSecondsRemaining", Read(state, "pairingSecondsRemaining")},
                     {"pairingAvailable", Read(state, "pairingAddress") != null},
+                    {"lanPort", lanPort},
                     {"lanError", Read(state, "lanError")}, {"usbError", Read(state, "usbError")},
                     {"pairingError", Read(state, "pairingError")},
                     {"discoveryEnabled", Flag(state, "discoveryEnabled")},
                     {"hidStatus", "Windows 虚拟 HID 驱动未发布 · 当前使用 Windows Ink"},
                     {"online", new Dictionary<string, object> {
                         {"endpoint", options["onlineEndpoint"]},
-                        {"code", onlineUntil > DateTime.UtcNow ? onlineCode : ""},
-                        {"status", onlineUntil > DateTime.UtcNow ? "已生成 · 五分钟内可使用一次" : "使用两端共用的 HTTPS 配对服务"},
+                        {"code", onlineAvailable ? onlineCode : ""},
+                        {"status", onlineAvailable ? "已生成 · 五分钟内可使用一次" : "使用两端共用的 HTTPS 配对服务"},
                     }},
                     {"usbDevices", usb.Devices}, {"usbScanStatus", usb.ScanStatus}, {"clients", clients}, {"logs", logs},
                     {"sample", Read(diagnostics, "sample")}, {"rate", Read(diagnostics, "rate") ?? 0},
@@ -169,10 +175,12 @@ namespace PenNoteBridge
                         SaveOptions();
                         break;
                     case "tablet_online_create":
-                        if (!Flag(Dictionary(Read(receiver.Snapshot(), "transports")), "lan"))
+                        string lanAddress = Text(receiver.Snapshot(), "lanAddress", "");
+                        if (ListenerPort(lanAddress) == 0)
                             throw new InvalidOperationException("请先启动局域网接收");
                         var pair = receiver.Pairing(Text(arguments, "address", ""));
                         onlineCode = OnlineRendezvous.Create((string)options["onlineEndpoint"], Text(pair, "payload", ""));
+                        onlineLanAddress = lanAddress;
                         onlineUntil = DateTime.UtcNow.AddMinutes(5);
                         break;
                     default:
@@ -226,12 +234,20 @@ namespace PenNoteBridge
             {
                 const string loopback = "127.0.0.1:";
                 string address = Text(state, "usbAddress", "");
-                if (!address.StartsWith(loopback, StringComparison.Ordinal)
-                    || !int.TryParse(address.Substring(loopback.Length), NumberStyles.None, CultureInfo.InvariantCulture, out port)
-                    || port < 1 || port > 65535)
+                port = ListenerPort(address);
+                if (!address.StartsWith(loopback, StringComparison.Ordinal) || port == 0)
                     throw new InvalidOperationException("USB 接收器返回了无效的本机端口");
             }
             SetUsbPort(port);
+        }
+
+        static int ListenerPort(string address)
+        {
+            int separator = address.LastIndexOf(':');
+            ushort port;
+            return separator >= 0
+                && UInt16.TryParse(address.Substring(separator + 1), NumberStyles.None, CultureInfo.InvariantCulture, out port)
+                ? port : 0;
         }
 
         void SetUsbPort(int port)

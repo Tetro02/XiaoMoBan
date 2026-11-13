@@ -11,8 +11,10 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::timeout;
+use pennote_bridge_receiver::DEFAULT_LAN_PORT;
 
-const MAGIC: &[u8; 4] = b"PNB1";
+const LEGACY_MAGIC: &[u8; 4] = b"PNB1";
+const PORT_MAGIC: &[u8; 4] = b"PNB2";
 const IDENTITY: &[u8] = b"PenNoteBridge";
 const CREDENTIAL_LABEL: &[u8] = b"PNB1 credential encryption";
 const GROUP_BYTES: usize = 256;
@@ -47,6 +49,7 @@ impl Window {
 struct State {
     window: Mutex<Window>,
     credentials: Vec<u8>,
+    lan_port: u16,
 }
 
 pub(crate) struct Pairing {
@@ -56,7 +59,7 @@ pub(crate) struct Pairing {
 }
 
 impl Pairing {
-    pub(crate) async fn start(port: u16, fingerprint: &str, token: &str,
+    pub(crate) async fn start(port: u16, lan_port: u16, fingerprint: &str, token: &str,
         stopped: impl Future<Output = ()> + Send + 'static,
     ) -> io::Result<Self> {
         let listener = TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await?;
@@ -64,7 +67,7 @@ impl Pairing {
         let mut credentials = Vec::with_capacity(88);
         credentials.extend_from_slice(fingerprint.as_bytes());
         credentials.extend_from_slice(token.as_bytes());
-        let state = Arc::new(State { window: Mutex::new(Window::new()?), credentials });
+        let state = Arc::new(State { window: Mutex::new(Window::new()?), credentials, lan_port });
         let worker = state.clone();
         let task = tokio::spawn(async move {
             tokio::select! {
@@ -116,10 +119,12 @@ async fn serve(listener: TcpListener, state: Arc<State>) {
 async fn exchange(mut stream: TcpStream, state: Arc<State>) -> io::Result<()> {
     let mut header = [0; 4 + GROUP_BYTES];
     stream.read_exact(&mut header).await?;
-    if &header[..MAGIC.len()] != MAGIC {
+    let magic = &header[..PORT_MAGIC.len()];
+    let sends_port = magic == PORT_MAGIC;
+    if !sends_port && (magic != LEGACY_MAGIC || state.lan_port != DEFAULT_LAN_PORT) {
         return Ok(());
     }
-    let padded_a = &header[MAGIC.len()..];
+    let padded_a = &header[magic.len()..];
     let Some(first_nonzero) = padded_a.iter().position(|&byte| byte != 0) else { return Ok(()) };
     let a = &padded_a[first_nonzero..];
     let (salt, verifier) = {
@@ -160,7 +165,8 @@ async fn exchange(mut stream: TcpStream, state: Arc<State>) -> io::Result<()> {
     let key = UnboundKey::new(&AES_256_GCM, &hash.finalize()).map_err(|_| crypto_error())?;
     let nonce = random()?;
     let mut credentials = state.credentials.clone();
-    LessSafeKey::new(key).seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(MAGIC), &mut credentials)
+    if sends_port { credentials.extend_from_slice(&state.lan_port.to_be_bytes()); }
+    LessSafeKey::new(key).seal_in_place_append_tag(Nonce::assume_unique_for_key(nonce), Aad::from(magic), &mut credentials)
         .map_err(|_| crypto_error())?;
     let mut reply = Vec::with_capacity(proof.proof().len() + nonce.len() + credentials.len());
     reply.extend_from_slice(proof.proof());

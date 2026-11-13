@@ -2,7 +2,7 @@
 
 把带 S Pen 的 Android 平板当作 Windows 笔板。看着电脑写字、批注或打开白板，平板保留独立的输入区。
 
-[下载 0.6.7 测试版](https://github.com/Tetro02/XiaoMoBan/releases/tag/v0.6.7)
+[下载 0.6.7 测试版](https://github.com/Tetro02/XiaoMoBan/releases/tag/v0.6.7) · [详细使用说明](docs/user-guide.md)
 
 ## 主要功能
 

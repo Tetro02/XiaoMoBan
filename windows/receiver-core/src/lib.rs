@@ -2,6 +2,7 @@ mod identity;
 
 use std::{
     collections::HashMap,
+    fmt,
     future::Future,
     io,
     net::SocketAddr,
@@ -48,6 +49,25 @@ pub enum Transport {
     Lan,
     Usb,
     Bluetooth,
+}
+
+#[derive(Debug)]
+pub struct ListenerBindError {
+    pub transport: Transport,
+    pub address: SocketAddr,
+    pub error: io::Error,
+}
+
+impl fmt::Display for ListenerBindError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:?} listener {}: {}", self.transport, self.address, self.error)
+    }
+}
+
+impl std::error::Error for ListenerBindError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.error)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -298,8 +318,8 @@ impl Receiver {
         if config.lan.is_none() && config.usb.is_none() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "no receiver listener was configured").into());
         }
-        let lan = bind(config.lan).await?;
-        let usb = bind(config.usb).await?;
+        let lan = bind(config.lan, Transport::Lan).await?;
+        let usb = bind(config.usb, Transport::Usb).await?;
         let lan_addr = lan.as_ref().map(TcpListener::local_addr).transpose()?;
         let usb_addr = usb.as_ref().map(TcpListener::local_addr).transpose()?;
         let fingerprint = identity.fingerprint_sha256().to_owned();
@@ -355,9 +375,10 @@ impl Receiver {
     }
 }
 
-async fn bind(addr: Option<SocketAddr>) -> io::Result<Option<TcpListener>> {
+async fn bind(addr: Option<SocketAddr>, transport: Transport) -> Result<Option<TcpListener>, ListenerBindError> {
     match addr {
-        Some(addr) => Ok(Some(TcpListener::bind(addr).await?)),
+        Some(address) => TcpListener::bind(address).await.map(Some)
+            .map_err(|error| ListenerBindError { transport, address, error }),
         None => Ok(None),
     }
 }

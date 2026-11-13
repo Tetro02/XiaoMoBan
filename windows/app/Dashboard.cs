@@ -41,7 +41,7 @@ namespace PenNoteBridge
         readonly Label hidState = LabelFor("");
         readonly Label bluetoothHidState = LabelFor("");
         readonly ThemeLabel pin = LabelFor("— — —");
-        readonly Label expiry = LabelFor("");
+        readonly ThemeLabel expiry = LabelFor("");
         readonly Label deviceSummary = LabelFor("连接设备", true);
         readonly Label pressureValue = LabelFor("×1.00");
         readonly Button annotate = ButtonFor("屏幕批注");
@@ -62,6 +62,7 @@ namespace PenNoteBridge
         readonly TrackBar pressure = new TrackBar { Minimum = 25, Maximum = 200, Value = 100, SmallChange = 5, LargeChange = 25,
             TickStyle = TickStyle.None, AutoSize = false, Dock = DockStyle.Fill, AccessibleName = "压感倍率" };
         readonly Timer sendPressure = new Timer { Interval = 220 };
+        readonly ToolTip connectionDetails = new ToolTip();
         readonly TextBox shortcut = new TextBox { ReadOnly = true, AccessibleName = "侧键快捷键" };
         readonly TextBox onlineEndpoint = new TextBox { AccessibleName = "在线配对服务 HTTPS 地址" };
         readonly Label onlineState = LabelFor("");
@@ -189,7 +190,7 @@ namespace PenNoteBridge
         Control BuildLan()
         {
             TableLayoutPanel body;
-            var view = ConnectionCard(0, out body, 36, 42, 25, 44, 26, 38, -1);
+            var view = ConnectionCard(0, out body, 36, 37, 25, 44, 23, 38, -1);
             body.Controls.Add(Title("在同一网络连接", 17F), 0, 0);
             body.Controls.Add(Paragraph("首次连接可输入六位连接码，或用平板扫描连接二维码。"), 0, 1);
             body.Controls.Add(LabelFor("本地连接码", true), 0, 2);
@@ -197,7 +198,7 @@ namespace PenNoteBridge
             pin.SetTone(LabelTone.Accent);
             pin.AccessibleName = "本地连接码";
             body.Controls.Add(Group(true, pin, copyCode, newCode), 0, 3);
-            body.Controls.Add(expiry, 0, 4);
+            body.Controls.Add(FillStatus(expiry), 0, 4);
             var destination = Grid(3, 1);
             destination.Dock = DockStyle.Fill;
             destination.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 75));
@@ -210,7 +211,13 @@ namespace PenNoteBridge
             showPair.Enabled = false;
             destination.Controls.Add(showPair, 2, 0);
             body.Controls.Add(destination, 0, 5);
-            body.Controls.Add(Group(true, lanState, lanStart), 0, 6);
+            var state = Rows(2, -1);
+            state.Dock = DockStyle.Fill;
+            state.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            state.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            state.Controls.Add(FillStatus(lanState), 0, 0);
+            state.Controls.Add(lanStart, 1, 0);
+            body.Controls.Add(state, 0, 6);
             return view;
         }
 
@@ -227,7 +234,7 @@ namespace PenNoteBridge
             body.Controls.Add(Group(true, attach, refresh, usbStart), 0, 3);
             var details = Rows(1, 22, -1);
             details.Dock = DockStyle.Fill;
-            details.Controls.Add(usbState, 0, 0);
+            details.Controls.Add(FillStatus(usbState), 0, 0);
             details.Controls.Add(usbScanStatus, 0, 1);
             body.Controls.Add(details, 0, 5);
             var locateAdb = ButtonFor("选择 adb.exe");
@@ -397,27 +404,30 @@ namespace PenNoteBridge
                 var active = Map(At(snapshot, "running"));
                 bool lanRunning = BoolAt(active, "lan"), usbRunning = BoolAt(active, "usb"), sppRunning = BoolAt(active, "bluetooth");
                 string wiredWinner = StringAt(snapshot, "wiredWinner");
-                lanState.Text = lanRunning ? "●  局域网已开启" : wiredWinner == "usb" ?
-                    "○  USB 已连接，局域网暂停" : "○  局域网已停止";
-                lanState.SetTone(lanRunning ? LabelTone.Success : LabelTone.Quiet);
-                usbState.Text = usbRunning ? "●  USB 接收已开启" : wiredWinner == "lan" ?
-                    "○  局域网已连接，USB 暂停" : "○  USB 接收已停止";
-                usbState.SetTone(usbRunning ? LabelTone.Success : LabelTone.Quiet);
+                string lanError = !lanRunning && wiredWinner != "usb" ? StringAt(snapshot, "lanError") : "";
+                string usbError = !usbRunning && wiredWinner != "lan" ? StringAt(snapshot, "usbError") : "";
+                SetConnectionState(lanState, lanRunning, wiredWinner == "usb", lanError,
+                    "●  局域网已开启", "○  USB 已连接，局域网暂停", "○  局域网已停止");
+                SetConnectionState(usbState, usbRunning, wiredWinner == "lan", usbError,
+                    "●  USB 接收已开启", "○  局域网已连接，USB 暂停", "○  USB 接收已停止");
                 lanStart.Visible = !lanRunning && wiredWinner != "usb";
                 usbStart.Visible = !usbRunning && wiredWinner != "lan";
                 sppStart.Visible = !sppRunning;
                 hidState.Text = StringAt(snapshot, "hidStatus");
                 bluetoothHidState.Text = StringAt(snapshot, "bluetoothHidStatus");
 
-                code = StringAt(snapshot, "shortPairingCode");
                 bool pairingAvailable = At(snapshot, "pairingAvailable") == null || BoolAt(snapshot, "pairingAvailable");
+                string pairingError = lanRunning && !pairingAvailable ? StringAt(snapshot, "pairingError") : "";
                 canRenew = lanRunning && pairingAvailable;
+                code = canRenew ? StringAt(snapshot, "shortPairingCode") : "";
                 pin.Text = code.Length == 6 ? code.Insert(3, " ") : "— — —";
                 pin.AccessibleDescription = code;
                 int seconds = (int)NumberAt(snapshot, "pairingSecondsRemaining", 0);
                 expiry.Text = code.Length == 6 && seconds > 0 ? "剩余 " + seconds + " 秒" : canRenew ?
-                    "点击刷新生成连接码" : lanRunning ? "配对服务不可用，可查看连接日志" : "开启局域网后生成";
-                if (lanRunning && At(snapshot, "discoveryEnabled") is bool && !BoolAt(snapshot, "discoveryEnabled"))
+                    "点击刷新生成连接码" : lanRunning ? "六位码不可用 · 请使用二维码" : "开启局域网后生成";
+                expiry.SetTone(pairingError.Length > 0 ? LabelTone.Error : LabelTone.Quiet);
+                SetConnectionDetails(expiry, pairingError);
+                if (canRenew && At(snapshot, "discoveryEnabled") is bool && !BoolAt(snapshot, "discoveryEnabled"))
                     lanState.Text = "●  局域网已开启，可手动输入电脑 IPv4";
                 bluetoothCode = StringAt(snapshot, "bluetoothCode");
                 if (bluetoothCode.Length == 0) bluetoothCode = StringAt(snapshot, "code");
@@ -488,6 +498,20 @@ namespace PenNoteBridge
             }
             finally { rendering = false; }
             UpdateButtons();
+        }
+
+        void SetConnectionState(ThemeLabel label, bool active, bool paused, string error, string started, string suspended, string stopped)
+        {
+            label.Text = active ? started : paused ? suspended : error.Length > 0 ? error : stopped;
+            label.SetTone(active ? LabelTone.Success : error.Length > 0 ? LabelTone.Error : LabelTone.Quiet);
+            SetConnectionDetails(label, error);
+        }
+
+        void SetConnectionDetails(ThemeLabel label, string details)
+        {
+            if (connectionDetails.GetToolTip(label) == details) return;
+            label.AccessibleDescription = details;
+            connectionDetails.SetToolTip(label, details);
         }
 
         void UpdateButtons()
@@ -701,6 +725,7 @@ namespace PenNoteBridge
             {
                 DesktopTheme.Changed -= ThemeChanged;
                 sendPressure.Dispose();
+                connectionDetails.Dispose();
                 if (settings != null) settings.Dispose();
             }
             base.Dispose(disposing);
@@ -905,6 +930,14 @@ namespace PenNoteBridge
         {
             return new ThemeLabel(important ? LabelTone.Ink : LabelTone.Quiet) { AutoSize = true, Text = text,
                 Anchor = AnchorStyles.Left, Margin = new Padding(0, 0, 4, 0), TextAlign = ContentAlignment.MiddleLeft, UseMnemonic = false };
+        }
+
+        static ThemeLabel FillStatus(ThemeLabel label)
+        {
+            label.AutoSize = false;
+            label.AutoEllipsis = true;
+            label.Dock = DockStyle.Fill;
+            return label;
         }
 
         static Button ButtonFor(string text, bool primary = false)

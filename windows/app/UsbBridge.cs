@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -12,10 +13,10 @@ namespace PenNoteBridge
 {
     internal sealed class UsbBridge : IDisposable
     {
-        const string Port = "tcp:57212";
+        const string TabletPort = "tcp:57212";
         readonly object operations = new object();
         readonly object state = new object();
-        readonly HashSet<string> added = new HashSet<string>(StringComparer.Ordinal);
+        readonly Dictionary<string, string> added = new Dictionary<string, string>(StringComparer.Ordinal);
         readonly Timer poll;
         readonly Action<string> log;
         Dictionary<string, object>[] devices = new Dictionary<string, object>[0];
@@ -24,7 +25,7 @@ namespace PenNoteBridge
         string selected;
         string active;
         string lastError;
-        bool enabled;
+        string hostTarget;
         bool disposed;
 
         public UsbBridge(Action<string> log, string adbPath)
@@ -51,19 +52,22 @@ namespace PenNoteBridge
             {
                 if (String.Equals(adbPath, path, StringComparison.OrdinalIgnoreCase)) return path;
                 ClearOwnedRules();
+                added.Clear();
                 adbPath = path;
                 return path;
             }
         }
 
-        public void Enable(bool enable)
+        public void SetHostPort(int port)
         {
+            string target = port == 0 ? null : "tcp:" + port.ToString(CultureInfo.InvariantCulture);
             lock (operations)
             {
-                if (disposed || enabled == enable) return;
-                enabled = enable;
-                poll.Change(enable ? 0 : Timeout.Infinite, enable ? 1600 : Timeout.Infinite);
-                if (!enable) ClearOwnedRules();
+                if (disposed || hostTarget == target) return;
+                ClearOwnedRules();
+                hostTarget = target;
+                lastError = null;
+                poll.Change(target != null ? 0 : Timeout.Infinite, target != null ? 1600 : Timeout.Infinite);
             }
         }
 
@@ -82,7 +86,7 @@ namespace PenNoteBridge
                 throw new InvalidOperationException("无效的 USB 设备");
             lock (operations)
             {
-                if (!enabled) throw new InvalidOperationException("请先启动 USB 接收");
+                if (hostTarget == null) throw new InvalidOperationException("请先启动 USB 接收");
                 Refresh();
                 var device = Devices.FirstOrDefault(d => (string)d["serial"] == serial && (string)d["state"] == "device");
                 if (device == null) throw new InvalidOperationException("请在平板上授权 USB 调试");
@@ -98,7 +102,7 @@ namespace PenNoteBridge
             bool refreshed = false;
             try
             {
-                if (!enabled || disposed) return;
+                if (hostTarget == null || disposed) return;
                 Refresh();
                 refreshed = true;
                 var authorized = Devices.Where(d => (string)d["state"] == "device").ToArray();
@@ -164,34 +168,49 @@ namespace PenNoteBridge
 
         void SetReverse(string serial)
         {
-            if (!HasReverse(Run("-s", serial, "reverse", "--list")))
+            string current = ReadReverseTarget(serial);
+            string owned;
+            if (added.TryGetValue(serial, out owned))
             {
-                Run("-s", serial, "reverse", "--no-rebind", Port, Port);
-                added.Add(serial);
-                if (!HasReverse(Run("-s", serial, "reverse", "--list")))
+                if (current == owned && owned != hostTarget)
+                {
+                    Run("-s", serial, "reverse", "--remove", TabletPort);
+                    current = null;
+                }
+                if (current != owned) added.Remove(serial);
+            }
+            if (current != null && current != hostTarget)
+                throw new InvalidOperationException("平板上的 USB 转发端口 57212 已被占用，请关闭使用该转发的程序后重试。");
+            if (current == null)
+            {
+                Run("-s", serial, "reverse", "--no-rebind", TabletPort, hostTarget);
+                added[serial] = hostTarget;
+                if (ReadReverseTarget(serial) != hostTarget)
                     throw new InvalidOperationException("ADB 未确认 USB 转发");
             }
             active = serial;
         }
 
-        static bool HasReverse(string output)
+        string ReadReverseTarget(string serial)
         {
-            return output.Split('\n').Any(line =>
+            foreach (string line in Run("-s", serial, "reverse", "--list").Split('\n'))
             {
                 string[] tokens = Regex.Split(line.Trim(), "\\s+");
-                return tokens.Length >= 2 && tokens[tokens.Length - 2] == Port && tokens[tokens.Length - 1] == Port;
-            });
+                if (tokens.Length >= 2 && tokens[tokens.Length - 2] == TabletPort)
+                    return tokens[tokens.Length - 1];
+            }
+            return null;
         }
 
         void ClearOwnedRules()
         {
-            foreach (string serial in added.ToArray())
+            foreach (var rule in added.ToArray())
             {
                 try
                 {
-                    if (HasReverse(Run("-s", serial, "reverse", "--list")))
-                        Run("-s", serial, "reverse", "--remove", Port);
-                    added.Remove(serial);
+                    if (ReadReverseTarget(rule.Key) == rule.Value)
+                        Run("-s", rule.Key, "reverse", "--remove", TabletPort);
+                    added.Remove(rule.Key);
                 }
                 catch (Exception error) { log("USB 转发清理 · " + error.Message); }
             }
@@ -269,7 +288,7 @@ namespace PenNoteBridge
             {
                 if (disposed) return;
                 disposed = true;
-                enabled = false;
+                hostTarget = null;
                 poll.Dispose();
                 ClearOwnedRules();
             }

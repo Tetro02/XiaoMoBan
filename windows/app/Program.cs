@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("小墨板")]
 [assembly: AssemblyDescription("Windows 数位板接收与屏幕批注")]
 [assembly: AssemblyProduct("小墨板")]
-[assembly: AssemblyVersion("0.6.5.0")]
-[assembly: AssemblyFileVersion("0.6.5.0")]
+[assembly: AssemblyVersion("0.6.6.0")]
+[assembly: AssemblyFileVersion("0.6.6.0")]
 
 namespace PenNoteBridge
 {

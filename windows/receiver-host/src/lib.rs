@@ -1,6 +1,6 @@
 use std::ffi::{c_char, CStr, CString};
 use std::fs;
-use std::io::{ErrorKind, Write};
+use std::io::{self, ErrorKind, Write};
 use std::net::{Ipv4Addr, SocketAddr, UdpSocket};
 use std::os::windows::process::CommandExt;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Instant;
 
-use pennote_bridge_receiver::{CanvasCommand, DisplayInfo, LanAccess, Receiver, RunningReceiver, ServerConfig,
+use pennote_bridge_receiver::{CanvasCommand, DisplayInfo, LanAccess, ListenerBindError, Receiver, RunningReceiver, ServerConfig,
     ServerIdentity, Transport, DEFAULT_LAN_PORT, DEFAULT_USB_PORT};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -121,11 +121,22 @@ struct Services {
     pairing: Option<pairing::Pairing>,
     discovery: Option<tokio::task::JoinHandle<()>>,
     addresses: Vec<Ipv4Addr>,
+    lan_error: Option<String>,
+    usb_error: Option<String>,
+    pairing_error: Option<String>,
 }
 
 impl Services {
     fn running(&self) -> bool {
         self.grpc.is_some() || self.bluetooth.is_some()
+    }
+}
+
+fn listener_error(label: &str, address: SocketAddr, error: &io::Error) -> String {
+    if error.kind() == ErrorKind::AddrInUse {
+        format!("{label} TCP 端口 {} 已被占用。", address.port())
+    } else {
+        format!("{label}无法监听 {address} · {error}")
     }
 }
 
@@ -166,21 +177,13 @@ impl Host {
             return Err("请选择一种连接方式".into());
         }
         self.signal.configure(config.clone())?;
+        services.lan_error = None;
+        services.usb_error = None;
+        services.pairing_error = None;
+        let mut wired_error = None;
         if config.lan_enabled || config.usb_enabled {
-            let signal = self.signal.clone();
-            let receiver = Receiver::new(move |event| signal.submit(event))
-                .first_wired_transport_wins(config.first_wired_transport_wins);
-            let options = ServerConfig {
-                lan: config.lan_enabled.then(|| SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.lan_port))),
-                usb: config.usb_enabled.then(|| SocketAddr::from((Ipv4Addr::LOCALHOST, config.usb_port))),
-                lan_access: if config.lan_enabled { LanAccess::PairingCode(self.code.clone()) } else { LanAccess::Disabled },
-                display: config.display(),
-            };
-            let result = self.runtime.block_on(receiver.start(self.identity.clone(), options))
-                .map_err(|error| format!("Wi-Fi 或 USB 接收器启动失败 · {error}"));
-            match result {
-                Ok(grpc) => services.grpc = Some(grpc),
-                Err(error) => self.signal.log(error),
+            if let Err(error) = self.start_wired(&config, &mut services) {
+                wired_error = Some(error);
             }
         }
         if let Some((lan, pairing_stopped, discovery_stopped)) = services.grpc.as_ref()
@@ -200,7 +203,12 @@ impl Host {
                     }
                     services.pairing = Some(pairing);
                 }
-                Err(error) => self.signal.log(format!("六位码配对启动失败 · {error}")),
+                Err(error) => {
+                    let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.pairing_port));
+                    let message = listener_error("六位码配对", address, &error);
+                    self.signal.log(format!("{message} 可以扫描二维码连接。"));
+                    services.pairing_error = Some(message);
+                }
             }
         }
         let mut radio_error = None;
@@ -217,10 +225,61 @@ impl Host {
         if services.running() {
             self.signal.log("等待平板连接");
         }
-        if (config.lan_enabled || config.usb_enabled) && services.grpc.is_none() {
-            return Err("Wi-Fi 或 USB 接收器启动失败，请查看连接日志".into());
-        }
+        if let Some(error) = wired_error { return Err(error); }
         radio_error.map_or(Ok(()), Err)
+    }
+
+    fn start_wired(&self, config: &Config, services: &mut Services) -> Result<(), String> {
+        let mut options = ServerConfig {
+            lan: config.lan_enabled.then(|| SocketAddr::from((Ipv4Addr::UNSPECIFIED, config.lan_port))),
+            usb: config.usb_enabled.then(|| SocketAddr::from((Ipv4Addr::LOCALHOST, config.usb_port))),
+            lan_access: if config.lan_enabled { LanAccess::PairingCode(self.code.clone()) } else { LanAccess::Disabled },
+            display: config.display(),
+        };
+        let mut switched_usb_port = false;
+        while options.lan.is_some() || options.usb.is_some() {
+            let signal = self.signal.clone();
+            let receiver = Receiver::new(move |event| signal.submit(event))
+                .first_wired_transport_wins(config.first_wired_transport_wins);
+            match self.runtime.block_on(receiver.start(self.identity.clone(), options.clone())) {
+                Ok(grpc) => {
+                    if let Some(address) = grpc.usb_address().filter(|_| switched_usb_port) {
+                        self.signal.log(format!("USB TCP 端口 {DEFAULT_USB_PORT} 已被占用，已改用本机端口 {}。", address.port()));
+                    }
+                    services.grpc = Some(grpc);
+                    return Ok(());
+                }
+                Err(error) => {
+                    let Some(bind) = error.downcast_ref::<ListenerBindError>() else {
+                        let message = format!("局域网或 USB 接收器启动失败 · {error}");
+                        self.signal.log(message.clone());
+                        return Err(message);
+                    };
+                    match bind.transport {
+                        Transport::Lan => {
+                            options.lan = None;
+                            options.lan_access = LanAccess::Disabled;
+                            let message = listener_error("局域网", bind.address, &bind.error);
+                            self.signal.log(message.clone());
+                            services.lan_error = Some(message);
+                        }
+                        Transport::Usb if bind.address.port() == DEFAULT_USB_PORT && bind.error.kind() == ErrorKind::AddrInUse => {
+                            // ADB keeps the tablet's port fixed while forwarding to the selected loopback port.
+                            options.usb = Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)));
+                            switched_usb_port = true;
+                        }
+                        Transport::Usb => {
+                            options.usb = None;
+                            let message = listener_error("USB", bind.address, &bind.error);
+                            self.signal.log(message.clone());
+                            services.usb_error = Some(message);
+                        }
+                        Transport::Bluetooth => unreachable!("Bluetooth does not use a gRPC listener"),
+                    }
+                }
+            }
+        }
+        Err(services.lan_error.iter().chain(&services.usb_error).cloned().collect::<Vec<_>>().join(" "))
     }
 
     fn configure(&self, patch: &str) -> Result<(), String> {
@@ -255,6 +314,9 @@ impl Host {
         }
         self.signal.release()?;
         self.signal.data.lock().unwrap().clients.clear();
+        services.lan_error = None;
+        services.usb_error = None;
+        services.pairing_error = None;
         if was_running {
             self.signal.log("接收器已停止");
         }
@@ -302,6 +364,9 @@ impl Host {
             "shortPairingCode": short_code,
             "pairingSecondsRemaining": pairing_seconds_remaining,
             "pairingAddress": pairing.map(|pairing| pairing.address),
+            "lanError": services.lan_error,
+            "usbError": services.usb_error,
+            "pairingError": services.pairing_error,
             "discoveryEnabled": lan_address.is_some() && services.discovery.is_some(),
             "clients": clients,
             "diagnostics": data.diagnostics,

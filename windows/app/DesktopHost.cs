@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -25,7 +26,7 @@ namespace PenNoteBridge
         DateTime onlineUntil;
         bool automaticWired;
         bool winnerEmptyLastPoll;
-        bool usbEnabled;
+        int usbPort;
         bool disposed;
         volatile bool injectInput;
 
@@ -97,6 +98,8 @@ namespace PenNoteBridge
                     {"shortPairingCode", Read(state, "shortPairingCode")},
                     {"pairingSecondsRemaining", Read(state, "pairingSecondsRemaining")},
                     {"pairingAvailable", Read(state, "pairingAddress") != null},
+                    {"lanError", Read(state, "lanError")}, {"usbError", Read(state, "usbError")},
+                    {"pairingError", Read(state, "pairingError")},
                     {"discoveryEnabled", Flag(state, "discoveryEnabled")},
                     {"hidStatus", "Windows 虚拟 HID 驱动未发布 · 当前使用 Windows Ink"},
                     {"online", new Dictionary<string, object> {
@@ -218,14 +221,24 @@ namespace PenNoteBridge
 
         void SyncUsb(IDictionary<string, object> state)
         {
-            SetUsbEnabled(Flag(Dictionary(Read(state, "transports")), "usb"));
+            int port = 0;
+            if (Flag(Dictionary(Read(state, "transports")), "usb"))
+            {
+                const string loopback = "127.0.0.1:";
+                string address = Text(state, "usbAddress", "");
+                if (!address.StartsWith(loopback, StringComparison.Ordinal)
+                    || !int.TryParse(address.Substring(loopback.Length), NumberStyles.None, CultureInfo.InvariantCulture, out port)
+                    || port < 1 || port > 65535)
+                    throw new InvalidOperationException("USB 接收器返回了无效的本机端口");
+            }
+            SetUsbPort(port);
         }
 
-        void SetUsbEnabled(bool enable)
+        void SetUsbPort(int port)
         {
-            if (usbEnabled == enable) return;
-            usb.Enable(enable);
-            usbEnabled = enable;
+            if (usbPort == port) return;
+            usb.SetHostPort(port);
+            usbPort = port;
         }
 
         void Start(Dictionary<string, object> desired, bool firstWins)
@@ -256,7 +269,7 @@ namespace PenNoteBridge
         void Stop()
         {
             try { receiver.Stop(); }
-            finally { SetUsbEnabled(false); }
+            finally { SetUsbPort(0); }
         }
 
         void UpdateOutput(Dictionary<string, object> desired)

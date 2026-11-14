@@ -42,6 +42,8 @@ final class PenSurface extends View {
     private boolean touchpadEnabled = true;
     private boolean down;
     private boolean hover;
+    private boolean penHovering;
+    private boolean quadrantGuides;
     private boolean samsungStroke;
     private boolean resize;
     private boolean drag;
@@ -62,6 +64,8 @@ final class PenSurface extends View {
     private int pressedButtons;
     private long buttonTime;
     private boolean hoverExitPending;
+    private float penHoverX;
+    private float penHoverY;
     private float dragX;
     private float dragY;
     private PenLink.Sample latest;
@@ -112,6 +116,21 @@ final class PenSurface extends View {
         this.enabled = enabled;
     }
 
+    void setQuadrantGuides(boolean visible) {
+        if (quadrantGuides == visible) return;
+        quadrantGuides = visible;
+        invalidate();
+    }
+
+    int hoveredQuadrant() {
+        if (!enabled || editing || !penHovering || down || pointer != -1 || !isShown() || !hasWindowFocus()
+                || !area.contains(penHoverX, penHoverY)) return 0;
+        boolean left = penHoverX < area.left + area.width / 2;
+        boolean top = penHoverY < area.top + area.height / 2;
+        if (top) return left ? 1 : 2;
+        return left ? 3 : 4;
+    }
+
     void setTouchpadEnabled(boolean enabled) {
         if (!enabled) touchpad.cancel();
         touchpadEnabled = enabled;
@@ -148,6 +167,7 @@ final class PenSurface extends View {
         cancelHoverExit();
         down = false;
         hover = false;
+        penHovering = false;
         samsungStroke = false;
         hardwareEraser = false;
         physicalBarrel = false;
@@ -172,6 +192,12 @@ final class PenSurface extends View {
         paint.setColor(editing ? TabletStyle.BOARD_EDIT : TabletStyle.BOARD);
         canvas.drawRect(frame, paint);
         drawGuideDots(canvas);
+        if (quadrantGuides && !editing) {
+            paint.setColor(TabletStyle.GRID);
+            paint.setStrokeWidth(density);
+            canvas.drawLine(frame.centerX(), frame.top, frame.centerX(), frame.bottom, paint);
+            canvas.drawLine(frame.left, frame.centerY(), frame.right, frame.centerY(), paint);
+        }
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(density);
         paint.setColor(editing ? TabletStyle.ACCENT : TabletStyle.LINE);
@@ -251,10 +277,22 @@ final class PenSurface extends View {
         resetPointer();
     }
 
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if (!focused) penHovering = false;
+    }
+
+    @Override protected void onDetachedFromWindow() {
+        penHovering = false;
+        super.onDetachedFromWindow();
+    }
+
     @Override public boolean onHoverEvent(MotionEvent event) {
-        if (event.getActionMasked() != MotionEvent.ACTION_HOVER_EXIT && event.getPointerCount() > 0 && stylus(event, 0))
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_HOVER_EXIT && event.getDeviceId() == penDevice) penHovering = false;
+        if (action != MotionEvent.ACTION_HOVER_EXIT && event.getPointerCount() > 0 && stylus(event, 0))
             touchpad.cancel();
-        if (down && event.getActionMasked() == MotionEvent.ACTION_HOVER_ENTER
+        if (down && action == MotionEvent.ACTION_HOVER_ENTER
                 && event.getDeviceId() == penDevice && event.getPointerCount() > 0
                 && stylus(event, 0) && event.getPressure(0) == 0) {
             // Hover from this pen also ends a stroke if the terminal event was lost.
@@ -263,7 +301,7 @@ final class PenSurface extends View {
         if (!enabled || editing || event.getPointerCount() == 0 || !stylus(event, 0) || pointer != -1) {
             return super.onHoverEvent(event);
         }
-        if (event.getActionMasked() == MotionEvent.ACTION_HOVER_EXIT) {
+        if (action == MotionEvent.ACTION_HOVER_EXIT) {
             if (hover && penDevice == event.getDeviceId()) {
                 // A hover exit also occurs on the way from hover to contact.
                 physicalBarrel |= readBarrel(event);
@@ -271,7 +309,7 @@ final class PenSurface extends View {
                 hoverExitPending = true;
                 postDelayed(finishHover, HOVER_EXIT_GRACE_MS);
             }
-        } else {
+        } else if (action == MotionEvent.ACTION_HOVER_ENTER || action == MotionEvent.ACTION_HOVER_MOVE) {
             updateHover(event, 0);
         }
         return true;
@@ -335,6 +373,9 @@ final class PenSurface extends View {
                     !mouse && hardwareEraser);
             boolean edge = !hover || sample.barrel != latest.barrel || sample.eraser != latest.eraser;
             hover = true;
+            penHovering = true;
+            penHoverX = px;
+            penHoverY = py;
             record(sample, eventNanos(event, -1), edge);
         } else if (hover) {
             release();
@@ -373,6 +414,7 @@ final class PenSurface extends View {
         if (!event.isFromSource(InputDevice.SOURCE_STYLUS)) return false;
         boolean samePen = down && event.getDeviceId() == penDevice;
         if (action == MotionEvent.ACTION_CANCEL) {
+            if (event.getDeviceId() == penDevice) penHovering = false;
             if (!samePen) return false;
             resetPointer();
             return true;
@@ -410,6 +452,7 @@ final class PenSurface extends View {
             pointer = -1;
         }
         if (action == MotionEvent.ACTION_CANCEL) {
+            if (event.getDeviceId() == penDevice) penHovering = false;
             if (pointer != -1 && event.getDeviceId() == penDevice) {
                 release();
                 pointer = -1;
@@ -451,6 +494,8 @@ final class PenSurface extends View {
 
     private void contact(MotionEvent event, int index, int history, String kind, boolean samsung) {
         touchpad.cancel();
+        // The pen can enter real hover again only when Android delivers a hover event.
+        penHovering = false;
         boolean historical = history >= 0;
         float px = fraction(historical ? event.getHistoricalX(index, history) : event.getX(index), getWidth());
         float py = fraction(historical ? event.getHistoricalY(index, history) : event.getY(index), getHeight());

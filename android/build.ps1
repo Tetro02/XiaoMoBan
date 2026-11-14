@@ -3,7 +3,7 @@ param(
     [string] $JavaHome = $env:JAVA_HOME,
     [string] $BuildTools,
     [string] $Python = 'python',
-    [string] $Output = (Join-Path $PSScriptRoot '.build/XiaoMoBan-0.6.7-dev.apk')
+    [string] $Output = (Join-Path $PSScriptRoot '.build/XiaoMoBan-0.6.8-dev.apk')
 )
 
 $ErrorActionPreference = 'Stop'

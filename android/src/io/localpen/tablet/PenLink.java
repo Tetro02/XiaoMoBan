@@ -191,6 +191,13 @@ final class PenLink {
                 && session.command(NAVIGATE, OfficialProtocol.navigate(motion), session.navigationPermit, false);
     }
 
+    boolean sendCanvasAction(int action) {
+        Session session = activeSession;
+        return action >= 3 && action <= 5 && ready && !stopped && session != null && session.display.penBodyGestures
+                && session.command(NAVIGATE, OfficialProtocol.navigate(new float[] {0, 0, 1, 0, 0, action}),
+                session.canvasActionPermit, false);
+    }
+
     boolean supportsRelativeMouse() {
         return port == BridgeProfile.LAN_PORT || port == BridgeProfile.USB_PORT || display().canvasNavigation;
     }
@@ -322,6 +329,7 @@ final class PenLink {
         volatile OfficialProtocol.Display display = OfficialProtocol.Display.UNKNOWN;
         final Semaphore shortcutPermit = new Semaphore(1);
         final Semaphore navigationPermit = new Semaphore(1);
+        final Semaphore canvasActionPermit = new Semaphore(1);
         CountDownLatch streamDone;
         Sample last;
 

@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyTitle("小墨板")]
 [assembly: AssemblyDescription("Windows 数位板接收与屏幕批注")]
 [assembly: AssemblyProduct("小墨板")]
-[assembly: AssemblyVersion("0.6.7.0")]
-[assembly: AssemblyFileVersion("0.6.7.0")]
+[assembly: AssemblyVersion("0.6.8.0")]
+[assembly: AssemblyFileVersion("0.6.8.0")]
 
 namespace PenNoteBridge
 {
@@ -114,6 +114,11 @@ namespace PenNoteBridge
                 CanvasNavigation motion;
                 for (int i = 0; i < 12 && receiver.TakeNavigation(out motion); i++)
                 {
+                    if (motion.Action >= 3)
+                    {
+                        if (receiver.CanInjectInput) annotation.HandlePenBodyGesture(motion.Action);
+                        continue;
+                    }
                     if (motion.Action == 2)
                     {
                         annotation.PanCanvasByPixels(motion.PanX, motion.PanY);

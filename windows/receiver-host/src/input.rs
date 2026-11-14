@@ -3,7 +3,7 @@ use std::ffi::c_void;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use pennote_bridge_receiver::{CanvasCommand, ClientInfo, InputMode, PointerFrame, ReceiverEvent, Shortcut};
+use pennote_bridge_receiver::{CanvasCommand, ClientInfo, InputMode, PointerFrame, ReceiverEvent, Shortcut, Transport};
 use serde::Serialize;
 use windows_sys::Win32::Foundation::{HWND, POINT};
 use windows_sys::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTONEAREST};
@@ -107,8 +107,17 @@ impl Data {
                 return;
             }
         }
-        if self.canvas_navigation.len() >= 64 {
-            self.canvas_navigation.pop_front();
+        // Bound motion and tool gestures independently so movement cannot evict a double-tap.
+        const QUEUE_LIMIT: usize = 64;
+        if self.canvas_navigation.len() >= QUEUE_LIMIT {
+            let is_gesture = command.is_pen_body_gesture();
+            let mut same_kind = self.canvas_navigation.iter().enumerate()
+                .filter(|(_, event)| event.command.is_pen_body_gesture() == is_gesture);
+            if let Some((oldest, _)) = same_kind.next() {
+                if same_kind.count() >= QUEUE_LIMIT - 1 {
+                    self.canvas_navigation.remove(oldest);
+                }
+            }
         }
         self.canvas_navigation.push_back(NavigationEvent { client: client.into(), command, capture });
     }
@@ -545,6 +554,9 @@ fn run_output(data: Arc<Mutex<Data>>, capture_windows: Arc<Mutex<Arc<[isize]>>>,
                 active = None;
                 retiring_stroke = None;
                 let mut data = data.lock().unwrap();
+                if !config.injection_enabled {
+                    data.canvas_navigation.retain(|event| !event.command.is_pen_body_gesture());
+                }
                 data.config = config;
                 data.tip_intents.clear();
                 let _ = done.send(());
@@ -589,9 +601,11 @@ fn run_output(data: Arc<Mutex<Data>>, capture_windows: Arc<Mutex<Arc<[isize]>>>,
                     }
                 }
             }
-            OutputEvent::Receiver(ReceiverEvent::NavigateCanvas { client, command, .. }) => {
+            OutputEvent::Receiver(ReceiverEvent::NavigateCanvas { transport, client, command }) => {
                 let mut data = data.lock().unwrap();
-                if data.clients.contains_key(&client.connection_id) {
+                let allowed = !command.is_pen_body_gesture()
+                    || (data.config.injection_enabled && matches!(transport, Transport::Lan | Transport::Usb));
+                if allowed && data.clients.contains_key(&client.connection_id) {
                     data.queue_navigation(&client.connection_id, command, None);
                 }
             }
@@ -846,6 +860,47 @@ mod tests {
         assert_eq!(signal.take_canvas_navigation().unwrap().pan_x, 1.0 / 64.0);
         signal.submit(ReceiverEvent::Disconnected { transport, client });
         signal.configure(disabled).unwrap();
+        assert!(signal.take_canvas_navigation().is_none());
+        signal.shutdown();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn pen_body_gestures_survive_motion_and_require_an_enabled_connected_client() {
+        let (signal, worker) = Signals::start(Arc::new(BarrelGestures::default())).unwrap();
+        let enabled = Config::default();
+        let disabled = Config { injection_enabled: false, ..enabled.clone() };
+        let transport = Transport::Usb;
+        let client = ClientInfo {
+            client_id: "tablet".into(), connection_id: "test".into(), display_name: "test".into(),
+            platform: "Android".into(), version: "test".into(), transport, peer: None,
+        };
+        let send = |command| signal.submit(ReceiverEvent::NavigateCanvas { transport, client: client.clone(), command });
+        let gesture = |action| CanvasCommand::new([0.0, 0.0, 1.0, 0.0, 0.0], action).unwrap();
+        send(gesture(3));
+        signal.submit(ReceiverEvent::Connected { transport, client: client.clone() });
+        send(gesture(4));
+        for _ in 0..80 {
+            send(CanvasCommand::new([0.1, 0.0, 1.0, 0.5, 0.5], 0).unwrap());
+        }
+        send(gesture(5));
+        send(gesture(5));
+        signal.configure(enabled.clone()).unwrap();
+        let queued: Vec<_> = std::iter::from_fn(|| signal.take_canvas_navigation()).collect();
+        assert_eq!(queued.len(), 67);
+        assert_eq!(queued.first().unwrap().action, 4);
+        assert!(queued[1..65].iter().all(|command| command.action == 0));
+        assert!(queued[65..].iter().all(|command| command.action == 5));
+
+        send(gesture(3));
+        signal.configure(disabled).unwrap();
+        send(gesture(4));
+        signal.configure(enabled.clone()).unwrap();
+        assert!(signal.take_canvas_navigation().is_none());
+
+        send(gesture(5));
+        signal.submit(ReceiverEvent::Disconnected { transport, client });
+        signal.configure(enabled).unwrap();
         assert!(signal.take_canvas_navigation().is_none());
         signal.shutdown();
         worker.join().unwrap();

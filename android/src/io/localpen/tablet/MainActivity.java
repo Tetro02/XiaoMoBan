@@ -7,9 +7,12 @@ import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothManager;
-import android.content.Intent;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.os.Build;
@@ -59,6 +62,11 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
     private static final int REQUEST_DISCOVERABLE = 13;
     private static final int REQUEST_HID_SCAN = 14;
     private static final String[] DEFAULT_SHORTCUTS = {"Ctrl+Z", "Ctrl+Y", "Ctrl+S", ""};
+    private static final String HUAWEI_PENCIL_DOUBLE_TAP = "com.huawei.stylus.action.BUTTON_DOUBLE_PRESSED";
+    private static final long PENCIL_DOUBLE_TAP_DEBOUNCE_MS = 250;
+    private static final int CANVAS_TOGGLE_ERASER = 3;
+    private static final int CANVAS_OPEN_MINI_WHITEBOARD = 4;
+    private static final int CANVAS_OPEN_ANNOTATION = 5;
     private enum Route { USB, LAN, BLUETOOTH }
     private static final class HidAttempt {
         final BluetoothDevice device;
@@ -100,6 +108,16 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
     private boolean rotateWithDirection;
     private int reportRate;
     private int barrelMode;
+    private boolean pencilQuadrantsEnabled;
+    private boolean pencilReceiverRegistered;
+    private long lastPencilDoubleTapAt = -PENCIL_DOUBLE_TAP_DEBOUNCE_MS;
+    private final BroadcastReceiver pencilReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (HUAWEI_PENCIL_DOUBLE_TAP.equals(intent.getAction()) && !isInitialStickyBroadcast()) {
+                handlePencilDoubleTap();
+            }
+        }
+    };
     private boolean autoUsb;
     private boolean usbPaused;
     private String clientId;
@@ -109,7 +127,7 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
     private AlertDialog bluetoothDialog;
     private BluetoothDevice hidFallbackDevice;
     private String hidFallbackMessage;
-    private boolean bluetoothUiResumed;
+    private boolean activityResumed;
     private boolean showingDiscoverability;
     private boolean waitingForHidPairing;
     private HidLink hidReadyToPair;
@@ -150,6 +168,7 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         rotateWithDirection = prefs.getBoolean("rotate_with_direction", false);
         barrelMode = prefs.getInt("barrel_mode", PenSurface.BARREL_ERASER) == PenSurface.BARREL_OFF
                 ? PenSurface.BARREL_OFF : PenSurface.BARREL_ERASER;
+        pencilQuadrantsEnabled = isHuaweiDevice() && prefs.getBoolean("pencil_quadrants_enabled", false);
         autoUsb = prefs.getBoolean("auto_official_usb", true);
         clientId = prefs.getString("official_client_id", "");
         if (clientId.isEmpty()) {
@@ -171,6 +190,7 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         surface.setTouchpadEnabled(touchpadEnabled);
         surface.setTouchpadGain(touchpadSpeed / 10f);
         surface.setHoverPanDeadzone(hoverPanDeadzonePx);
+        surface.setQuadrantGuides(pencilQuadrantsEnabled);
         surface.addOnLayoutChangeListener((view, l, t, r, b, oldL, oldT, oldR, oldB) -> syncAreaAspect());
         updateOutput();
         page.addView(surface, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -505,6 +525,13 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         TextView menuHint = label("绝对笔模式下，悬空按住侧键移动画布，按住侧键落笔擦除。三星侧键浮窗可在系统「S Pen → 浮窗指令」中关闭。", 13, MUTED);
         menuHint.setLineSpacing(dp(4), 1);
         fields.addView(menuHint);
+        Switch pencilQuadrants = isHuaweiDevice() ? toggle("笔身双击四象限", pencilQuadrantsEnabled) : null;
+        if (pencilQuadrants != null) {
+            fields.addView(pencilQuadrants);
+            TextView pencilHint = label("笔尖悬停在工作区时双击笔身。左上打开小窗白板，右上切换橡皮，左下打开屏幕批注，右下无动作。需要支持笔身双击的华为手写笔，并通过局域网或 USB 连接桌面端。", 13, MUTED);
+            pencilHint.setLineSpacing(dp(4), 1);
+            fields.addView(pencilHint);
+        }
         Button diagnosis = tool(this, "侧键诊断", null, () -> {});
         fields.addView(diagnosis);
         ScrollView scroll = new ScrollView(this);
@@ -520,12 +547,20 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
                     touchpadSpeed = speed.getProgress() + 5;
                     hoverPanDeadzonePx = deadzone.getProgress();
                     barrelMode = barrel.isChecked() ? PenSurface.BARREL_ERASER : PenSurface.BARREL_OFF;
-                    prefs.edit().putInt("report_rate", reportRate).putBoolean("send_tilt", sendTilt)
+                    SharedPreferences.Editor settings = prefs.edit().putInt("report_rate", reportRate)
+                            .putBoolean("send_tilt", sendTilt)
                             .putBoolean("rotate_with_direction", rotateWithDirection)
                             .putBoolean("touchpad_enabled", touchpadEnabled)
                             .putInt("touchpad_speed", touchpadSpeed)
                             .putInt("hover_pan_deadzone_px", hoverPanDeadzonePx)
-                            .putInt("barrel_mode", barrelMode).apply();
+                            .putInt("barrel_mode", barrelMode);
+                    if (pencilQuadrants != null) {
+                        pencilQuadrantsEnabled = pencilQuadrants.isChecked();
+                        settings.putBoolean("pencil_quadrants_enabled", pencilQuadrantsEnabled);
+                        surface.setQuadrantGuides(pencilQuadrantsEnabled);
+                        updatePencilReceiver();
+                    }
+                    settings.apply();
                     surface.setPenOptions(reportRate, sendTilt, rotateWithDirection, barrelMode);
                     surface.setTouchpadEnabled(touchpadEnabled);
                     surface.setTouchpadGain(touchpadSpeed / 10f);
@@ -940,7 +975,7 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
     }
 
     private boolean hidForeground() {
-        return bluetoothUiResumed && bluetoothDialog == null && hasWindowFocus() && !isFinishing();
+        return activityResumed && bluetoothDialog == null && hasWindowFocus() && !isFinishing();
     }
 
     private void queueHid(HidAttempt attempt) {
@@ -1253,7 +1288,8 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
 
     @Override protected void onResume() {
         super.onResume();
-        bluetoothUiResumed = true;
+        activityResumed = true;
+        updatePencilReceiver();
         schedulePendingHid();
         showPendingHidFallback();
         if (autoUsb && !usbPaused && link == null && bluetoothLink == null && hidLink == null
@@ -1279,7 +1315,8 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
     }
 
     @Override protected void onPause() {
-        bluetoothUiResumed = false;
+        activityResumed = false;
+        updatePencilReceiver();
         surface.removeCallbacks(startPendingHid);
         super.onPause();
         traceLine("window paused");
@@ -1289,6 +1326,7 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
 
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
+        updatePencilReceiver();
         if (focused) {
             schedulePendingHid();
             showPendingHidDiscovery();
@@ -1306,6 +1344,52 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         if (hidHostScan != null) hidHostScan.close();
         if (surface != null) disconnect("未连接");
         super.onDestroy();
+    }
+
+    private static boolean isHuaweiDevice() {
+        return "HUAWEI".equalsIgnoreCase(Build.MANUFACTURER);
+    }
+
+    private boolean pencilGestureForeground() {
+        return pencilQuadrantsEnabled && activityResumed && hasWindowFocus() && !isFinishing();
+    }
+
+    private void updatePencilReceiver() {
+        boolean listen = pencilGestureForeground();
+        if (listen == pencilReceiverRegistered) return;
+        if (listen) {
+            IntentFilter filter = new IntentFilter(HUAWEI_PENCIL_DOUBLE_TAP);
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(pencilReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+            } else {
+                // Huawei's documented broadcast has no sender authentication on these API levels.
+                // Listen only in the focused Activity and require pen hover before any canvas action.
+                registerReceiver(pencilReceiver, filter);
+            }
+        } else {
+            unregisterReceiver(pencilReceiver);
+        }
+        pencilReceiverRegistered = listen;
+    }
+
+    private void handlePencilDoubleTap() {
+        if (!pencilGestureForeground()) return;
+        int quadrant = surface.hoveredQuadrant();
+        traceLine("pencil double tap quadrant=" + quadrant);
+        int action;
+        switch (quadrant) {
+            case 1: action = CANVAS_OPEN_MINI_WHITEBOARD; break;
+            case 2: action = CANVAS_TOGGLE_ERASER; break;
+            case 3: action = CANVAS_OPEN_ANNOTATION; break;
+            default: return;
+        }
+        long now = SystemClock.uptimeMillis();
+        if (now - lastPencilDoubleTapAt < PENCIL_DOUBLE_TAP_DEBOUNCE_MS) return;
+        lastPencilDoubleTapAt = now;
+        if (link == null || !link.sendCanvasAction(action)) {
+            traceLine("pencil canvas action unavailable");
+            Toast.makeText(this, "请通过局域网或 USB 连接支持笔身双击的小墨板桌面端", Toast.LENGTH_SHORT).show();
+        }
     }
 
     @Override public void areaChanged() {
@@ -1429,7 +1513,7 @@ public final class MainActivity extends Activity implements PenSurface.Listener 
         surface.setCapture(false);
         String report = TextUtils.join("\n", penTrace);
         TextView text = label(report.isEmpty()
-                ? "开始记录后，按住侧键再落笔，然后回这里查看。只记录应用收到的事件类型、侧键和压感。"
+                ? "开始记录后，按住侧键再落笔，或启用四象限后悬空双击笔身，然后回这里查看。"
                 : report, 13, TEXT);
         text.setPadding(dp(22), dp(12), dp(22), dp(8));
         ScrollView scroll = new ScrollView(this);

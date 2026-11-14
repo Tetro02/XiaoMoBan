@@ -233,14 +233,21 @@ pub struct CanvasCommand {
 }
 
 impl CanvasCommand {
-    pub fn new([pan_x, pan_y, scale, focus_x, focus_y]: [f32; 5], action: u32) -> Option<Self> {
-        if !(-1.0..=1.0).contains(&pan_x) || !(-1.0..=1.0).contains(&pan_y)
-            || !(0.5..=2.0).contains(&scale) || !(0.0..=1.0).contains(&focus_x)
-            || !(0.0..=1.0).contains(&focus_y) || action > 1
-        {
-            return None;
-        }
-        Some(Self { pan_x, pan_y, scale, focus_x, focus_y, action })
+    pub fn new(values: [f32; 5], action: u32) -> Option<Self> {
+        let [pan_x, pan_y, scale, focus_x, focus_y] = values;
+        let command = Self { pan_x, pan_y, scale, focus_x, focus_y, action };
+        let valid = if command.is_pen_body_gesture() {
+            values == [0.0, 0.0, 1.0, 0.0, 0.0]
+        } else {
+            action <= 1 && (-1.0..=1.0).contains(&pan_x) && (-1.0..=1.0).contains(&pan_y)
+                && (0.5..=2.0).contains(&scale) && (0.0..=1.0).contains(&focus_x)
+                && (0.0..=1.0).contains(&focus_y)
+        };
+        valid.then_some(command)
+    }
+
+    pub fn is_pen_body_gesture(self) -> bool {
+        matches!(self.action, 3..=5)
     }
 }
 
@@ -793,11 +800,17 @@ impl VtService for Service {
 
     async fn navigate_canvas(&self, request: Request<CanvasNavigation>) -> Result<Response<Empty>, Status> {
         let key = self.authorize(&request)?;
-        let supported = self.shared.display.borrow().canvas_navigation;
+        let (supported, pen_body_gestures) = {
+            let display = self.shared.display.borrow();
+            (display.canvas_navigation, display.pen_body_gestures)
+        };
         let client = self.command_client(&key, supported)?;
         let input = request.into_inner();
         let command = CanvasCommand::new([input.pan_x, input.pan_y, input.scale, input.focus_x, input.focus_y], input.action)
             .ok_or_else(|| Status::invalid_argument("invalid canvas navigation"))?;
+        if command.is_pen_body_gesture() && !pen_body_gestures {
+            return Err(Status::unimplemented("pen body gestures are unavailable"));
+        }
         (self.shared.on_event)(ReceiverEvent::NavigateCanvas { transport: self.transport, client, command });
         Ok(Response::new(Empty {}))
     }

@@ -38,6 +38,7 @@ message ServerInfo {
   repeated uint32 display_refresh_hz = 7;
   bool keyboard_shortcuts = 8;
   bool canvas_navigation = 9;
+  bool pen_body_gestures = 10;
 }
 
 message KeyboardShortcut {

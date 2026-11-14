@@ -120,7 +120,8 @@ enum CanvasValues {
 impl CanvasValues {
     fn command(self) -> Option<CanvasCommand> {
         match self {
-            Self::WithAction((dx, dy, scale, x, y, action)) => CanvasCommand::new([dx, dy, scale, x, y], action),
+            Self::WithAction((dx, dy, scale, x, y, action @ 0..=1)) => CanvasCommand::new([dx, dy, scale, x, y], action),
+            Self::WithAction(_) => None,
             Self::Motion(values) => CanvasCommand::new(values, 0),
         }
     }
@@ -294,5 +295,8 @@ mod tests {
             assert_eq!(parsed.canvas.command().unwrap().action, action);
         }
         assert!(serde_json::from_str::<CommandLine>(r#"{"canvas":[0,0,1,0,0,1.2]}"#).is_err());
+        let CommandLine::Canvas(gesture) = serde_json::from_str(r#"{"canvas":[0,0,1,0,0,3]}"#).unwrap()
+            else { panic!("wrong command type"); };
+        assert!(gesture.canvas.command().is_none());
     }
 }

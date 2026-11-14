@@ -111,7 +111,7 @@ impl Config {
             server_name: "小墨板".into(), width: self.width as u32, height: self.height as u32,
             display_name: self.display_name.clone(), display_index: self.display_index,
             host_os: "windows".into(), display_refresh_hz: vec![self.display_refresh_hz],
-            keyboard_shortcuts: true, canvas_navigation: true,
+            keyboard_shortcuts: true, canvas_navigation: true, pen_body_gestures: true,
         }
     }
 }

@@ -98,6 +98,7 @@ internal sealed class AnnotationController : IDisposable
     private Mode mode;
     private int boardIndex;
     private Tool tool;
+    private Tool toolBeforeEraser;
     private Color ink = Color.FromArgb(227, 44, 65);
     private float width = 4;
     private int eraserSize = 20;
@@ -185,6 +186,37 @@ internal sealed class AnnotationController : IDisposable
         if (!smallBoard) boardReference = Screen.FromPoint(Cursor.Position).Bounds;
         smallBoard = true;
         SwitchMode(Mode.Board);
+    }
+
+    internal void HandlePenBodyGesture(uint action)
+    {
+        if (disposed || modalDepth != 0) return;
+        switch (action)
+        {
+            case 3:
+                if (mode == Mode.None) return;
+                Tool previous = toolBeforeEraser == Tool.Pan && !Whiteboard ? Tool.Ink : toolBeforeEraser;
+                SelectTool(tool == Tool.Eraser ? previous : Tool.Eraser);
+                break;
+            case 4:
+                if (!Whiteboard || !smallBoard) ToggleMiniWhiteboard();
+                break;
+            case 5: SwitchMode(Mode.Screen); break;
+        }
+    }
+
+    private void SelectTool(Tool selected)
+    {
+        FinishGesture();
+        ClearErasePreview();
+        if (selected == Tool.Eraser && tool != Tool.Eraser) toolBeforeEraser = tool;
+        tool = selected;
+        if (clickThrough)
+        {
+            clickThrough = false;
+            UpdateVisibility();
+        }
+        else palette.UpdateState();
     }
 
     internal void Undo()
@@ -1451,14 +1483,7 @@ internal sealed class AnnotationController : IDisposable
 
         private ToolStripButton AddTool(ToolStrip strip, Tool tool, string title)
         {
-            ToolStripButton button = AddButton(strip, title, delegate
-            {
-                controller.FinishGesture();
-                controller.ClearErasePreview();
-                controller.tool = tool;
-                if (controller.clickThrough) TogglePass();
-                else UpdateState();
-            });
+            ToolStripButton button = AddButton(strip, title, delegate { controller.SelectTool(tool); });
             toolButtons.Add(tool, button);
             return button;
         }

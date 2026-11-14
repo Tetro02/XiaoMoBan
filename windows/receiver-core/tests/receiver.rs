@@ -77,7 +77,7 @@ async fn tls_lan_pairing_usb_and_pointer_lifecycle() -> Result<(), ReceiverError
             usb: Some(([127, 0, 0, 1], 0).into()),
             lan_access: LanAccess::PairingCode(CODE.into()),
             display: DisplayInfo { width: 1920, height: 1080,
-                keyboard_shortcuts: true, canvas_navigation: true, ..Default::default() },
+                keyboard_shortcuts: true, canvas_navigation: true, pen_body_gestures: true, ..Default::default() },
         }).await?;
     assert_eq!(receiver.fingerprint_sha256(), fingerprint);
 
@@ -92,6 +92,11 @@ async fn tls_lan_pairing_usb_and_pointer_lifecycle() -> Result<(), ReceiverError
     let navigation = CanvasNavigation { pan_x: 0.1, pan_y: -0.15, scale: 1.2, focus_x: 0.4, focus_y: 0.5, action: 0 };
     let denied = lan.navigate_canvas(request(navigation, "lan-session", Some("WRONGCODE000"))).await.unwrap_err();
     assert_eq!(denied.code(), Code::Unauthenticated);
+    let gesture = CanvasNavigation { action: 3, scale: 1.0, ..Default::default() };
+    let denied = lan.navigate_canvas(request(gesture, "lan-session", None)).await.unwrap_err();
+    assert_eq!(denied.code(), Code::Unauthenticated);
+    let denied = lan.navigate_canvas(request(gesture, "lan-session", Some(CODE))).await.unwrap_err();
+    assert_eq!(denied.code(), Code::FailedPrecondition);
     let denied = lan.handshake(request(greeting(), "lan-session", Some("WRONGCODE000"))).await.unwrap_err();
     assert_eq!(denied.code(), Code::Unauthenticated);
     assert!(receiver.clients().is_empty());
@@ -104,11 +109,13 @@ async fn tls_lan_pairing_usb_and_pointer_lifecycle() -> Result<(), ReceiverError
     assert_eq!(display.width, 1920);
     assert!(display.keyboard_shortcuts);
     assert!(display.canvas_navigation);
+    assert!(display.pen_body_gestures);
     assert!(matches!(event(&mut events).await, ReceiverEvent::Connected { transport: Transport::Lan, .. }));
     let mut observer = lan.observe_server_info(request(Empty {}, "lan-session", Some(CODE))).await?.into_inner();
     assert_eq!(observer.message().await?.unwrap().height, 1080);
     receiver.set_display_info(DisplayInfo { width: 2560, height: 1440, ..display });
-    assert_eq!(observer.message().await?.unwrap().width, 2560);
+    let display = observer.message().await?.unwrap();
+    assert_eq!(display.width, 2560);
 
     let (pen_tx, pen_rx) = mpsc::channel(4);
     let mut pen_client = lan.clone();
@@ -141,10 +148,21 @@ async fn tls_lan_pairing_usb_and_pointer_lifecycle() -> Result<(), ReceiverError
     let invalid = CanvasNavigation { action: 2, ..navigation };
     let rejected = lan.navigate_canvas(request(invalid, "lan-session", Some(CODE))).await.unwrap_err();
     assert_eq!(rejected.code(), Code::InvalidArgument);
+    for invalid in [CanvasNavigation { focus_x: 0.5, ..gesture }, CanvasNavigation { action: 6, ..gesture }] {
+        let rejected = lan.navigate_canvas(request(invalid, "lan-session", Some(CODE))).await.unwrap_err();
+        assert_eq!(rejected.code(), Code::InvalidArgument);
+    }
     lan.navigate_canvas(request(navigation, "lan-session", Some(CODE))).await?;
     assert!(matches!(event(&mut events).await,
         ReceiverEvent::NavigateCanvas { transport: Transport::Lan, command, .. }
             if command.pan_x == navigation.pan_x && command.scale == navigation.scale));
+    lan.navigate_canvas(request(gesture, "lan-session", Some(CODE))).await?;
+    assert!(matches!(event(&mut events).await,
+        ReceiverEvent::NavigateCanvas { transport: Transport::Lan, command, .. } if command.action == 3));
+    receiver.set_display_info(DisplayInfo { pen_body_gestures: false, ..display.clone() });
+    assert!(!observer.message().await?.unwrap().pen_body_gestures);
+    let rejected = lan.navigate_canvas(request(gesture, "lan-session", Some(CODE))).await.unwrap_err();
+    assert_eq!(rejected.code(), Code::Unimplemented);
     assert!(receiver.disconnect(Transport::Lan, "lan-session"));
     let release = frame(&mut events, Transport::Lan).await;
     assert!(!release.in_range && !release.contact && !release.barrel);
@@ -152,6 +170,7 @@ async fn tls_lan_pairing_usb_and_pointer_lifecycle() -> Result<(), ReceiverError
     assert_eq!(pen.await?.unwrap_err().code(), Code::Cancelled);
     drop(pen_tx);
     assert!(observer.message().await?.is_none());
+    receiver.set_display_info(display);
 
     let mut usb = connect(receiver.usb_addr.unwrap(), &certificate).await?;
     assert!(usb.handshake(request(greeting(), "usb-session", None)).await?.get_ref().compatible);
@@ -163,6 +182,11 @@ async fn tls_lan_pairing_usb_and_pointer_lifecycle() -> Result<(), ReceiverError
     usb.navigate_canvas(request(secondary_click, "usb-session", None)).await?;
     assert!(matches!(event(&mut events).await,
         ReceiverEvent::NavigateCanvas { transport: Transport::Usb, command, .. } if command.action == 1));
+    for action in [4, 5] {
+        usb.navigate_canvas(request(CanvasNavigation { action, ..gesture }, "usb-session", None)).await?;
+        assert!(matches!(event(&mut events).await,
+            ReceiverEvent::NavigateCanvas { transport: Transport::Usb, command, .. } if command.action == action));
+    }
     let motion = AbsoluteMouseEvent { buttons: 3, x: 32767, y: 0, client_send_us: 21, ..Default::default() };
     usb.stream_absolute_mouse_events(request(tokio_stream::iter([motion]), "usb-session", None)).await?;
     let click = frame(&mut events, Transport::Usb).await;

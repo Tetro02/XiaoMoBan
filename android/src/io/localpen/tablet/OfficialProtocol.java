@@ -20,23 +20,29 @@ final class OfficialProtocol {
         final int height;
         final boolean shortcuts;
         final boolean canvasNavigation;
+        final boolean penBodyGestures;
 
         Display(int width, int height, boolean shortcuts, boolean canvasNavigation) {
+            this(width, height, shortcuts, canvasNavigation, false);
+        }
+
+        Display(int width, int height, boolean shortcuts, boolean canvasNavigation, boolean penBodyGestures) {
             this.width = width;
             this.height = height;
             this.shortcuts = shortcuts;
             this.canvasNavigation = canvasNavigation;
+            this.penBodyGestures = penBodyGestures;
         }
 
         boolean sameAs(Display other) {
             return width == other.width && height == other.height && shortcuts == other.shortcuts
-                    && canvasNavigation == other.canvasNavigation;
+                    && canvasNavigation == other.canvasNavigation && penBodyGestures == other.penBodyGestures;
         }
     }
 
     static byte[] handshake(String device) {
         Encoder e = new Encoder();
-        e.text(1, "XiaoMoBan 0.6.7");
+        e.text(1, "XiaoMoBan 0.6.8");
         e.bytes(2, new byte[] {1, 2});
         e.text(3, device);
         e.text(4, "android");
@@ -63,15 +69,17 @@ final class OfficialProtocol {
         int height = 0;
         boolean shortcuts = false;
         boolean canvasNavigation = false;
+        boolean penBodyGestures = false;
         while (d.position < message.length) {
             long tag = d.number();
             if (tag == 16) width = (int) d.number();
             else if (tag == 24) height = (int) d.number();
             else if (tag == 64) shortcuts = d.number() != 0;
             else if (tag == 72) canvasNavigation = d.number() != 0;
+            else if (tag == 80) penBodyGestures = d.number() != 0;
             else d.skip((int) tag & 7);
         }
-        return new Display(width, height, shortcuts, canvasNavigation);
+        return new Display(width, height, shortcuts, canvasNavigation, penBodyGestures);
     }
 
     static byte[] shortcut(byte[] keyboardReport) {
